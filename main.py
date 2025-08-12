@@ -80,7 +80,9 @@ st.markdown("""
         display: table;
         width: max-content;
         min-width: 100%;
-        border-collapse: collapse;
+        border-collapse: separate;
+        border-spacing: 0;
+        table-layout: fixed;
     }
     
     .diff-line {
@@ -93,38 +95,47 @@ st.markdown("""
         display: table-cell;
         background: #2d2d30;
         color: #858585;
-        padding: 2px 8px;
-        min-width: 40px;
+        padding: 4px 8px;
+        width: 50px;
+        min-width: 50px;
+        max-width: 50px;
         text-align: right;
         border-right: 1px solid #464647;
         user-select: none;
         position: sticky;
         left: 0;
         z-index: 5;
+        vertical-align: middle;
     }
     
     .line-content {
         display: table-cell;
-        padding: 2px 0;
+        padding: 0;
         white-space: nowrap;
+        vertical-align: middle;
     }
     
     .cell-data {
         display: inline-block;
-        padding: 2px 8px;
-        min-width: 100px;
+        padding: 4px 12px;
+        width: 120px;
+        min-width: 120px;
         border-right: 1px solid #3a3a3a;
+        border-bottom: 1px solid #3a3a3a;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 200px;
+        vertical-align: middle;
+        box-sizing: border-box;
     }
     
     .cell-data:hover {
-        max-width: none;
+        overflow: visible;
         background: rgba(255, 255, 255, 0.05);
         position: relative;
         z-index: 2;
+        max-width: none;
+        width: auto;
     }
     
     /* Diff highlighting colors - VS Code style */
@@ -152,7 +163,7 @@ st.markdown("""
     .cell-value-old {
         background: rgba(229, 83, 75, 0.2) !important;
         color: #f85149 !important;
-        padding: 1px 4px;
+        padding: 2px 6px;
         border-radius: 2px;
         text-decoration: line-through;
     }
@@ -160,7 +171,7 @@ st.markdown("""
     .cell-value-new {
         background: rgba(87, 171, 90, 0.2) !important;
         color: #57ab5a !important;
-        padding: 1px 4px;
+        padding: 2px 6px;
         border-radius: 2px;
         font-weight: bold;
     }
@@ -180,6 +191,12 @@ st.markdown("""
         color: #007ACC;
         font-weight: bold;
         border-right: 1px solid #464647;
+        border-bottom: 2px solid #464647;
+    }
+    
+    .header-row .line-number {
+        background: #2d2d30;
+        border-bottom: 2px solid #464647;
     }
     
     /* Stats cards */
@@ -449,6 +466,391 @@ class ExcelDiffVisualizer:
         else:
             return str(value)
     
+    def create_synchronized_diff_component(self, sheet_name):
+        """Create synchronized diff view using Streamlit components for true scrolling sync"""
+        sheet_changes = self.changes.get(sheet_name, {})
+        
+        if sheet_changes.get('sheet_added') or sheet_changes.get('sheet_removed'):
+            # For added/removed sheets, use the regular view
+            return self.create_vs_code_diff_html(sheet_name)
+        
+        original_df = sheet_changes.get('original_df', pd.DataFrame())
+        modified_df = sheet_changes.get('modified_df', pd.DataFrame())
+        column_headers = sheet_changes.get('column_headers', {})
+        
+        # Get max dimensions
+        max_rows = max(len(original_df) if not original_df.empty else 10,
+                      len(modified_df) if not modified_df.empty else 10, 10)
+        max_cols = max(len(original_df.columns) if not original_df.empty else 5,
+                      len(modified_df.columns) if not modified_df.empty else 5, 5)
+        
+        # Build change map
+        change_map = {}
+        for mod in sheet_changes.get('modifications', []):
+            change_map[(mod['row']-1, mod['col']-1)] = mod
+        
+        # Clean sheet name for IDs
+        sheet_id = sheet_name.replace(' ', '_').replace('(', '').replace(')', '')
+        
+        # Generate HTML for original side
+        original_html = self._generate_table_html(
+            original_df, column_headers, change_map, max_rows, max_cols, is_original=True
+        )
+        
+        # Generate HTML for modified side
+        modified_html = self._generate_table_html(
+            modified_df, column_headers, change_map, max_rows, max_cols, is_original=False
+        )
+        
+        # Create full HTML with embedded JavaScript for synchronized scrolling
+        full_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{
+                    margin: 0;
+                    padding: 0;
+                    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+                    background: #1e1e1e;
+                    color: #d4d4d4;
+                }}
+                
+                .diff-container {{
+                    background: #1e1e1e;
+                    border-radius: 6px;
+                    overflow: hidden;
+                    height: 100vh;
+                    display: flex;
+                    flex-direction: column;
+                }}
+                
+                .diff-header {{
+                    background: #2d2d30;
+                    color: #cccccc;
+                    padding: 10px 15px;
+                    font-weight: bold;
+                    border-bottom: 1px solid #464647;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    flex-shrink: 0;
+                }}
+                
+                .sync-badge {{
+                    background: #28a745;
+                    color: white;
+                    padding: 4px 10px;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    animation: pulse 2s infinite;
+                }}
+                
+                @keyframes pulse {{
+                    0% {{ opacity: 1; }}
+                    50% {{ opacity: 0.7; }}
+                    100% {{ opacity: 1; }}
+                }}
+                
+                .diff-grid {{
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 2px;
+                    background: #2d2d30;
+                    padding: 1px;
+                    flex: 1;
+                    overflow: hidden;
+                }}
+                
+                .diff-side {{
+                    background: #1e1e1e;
+                    display: flex;
+                    flex-direction: column;
+                    overflow: hidden;
+                }}
+                
+                .diff-side-header {{
+                    background: #2d2d30;
+                    color: #969696;
+                    padding: 8px 15px;
+                    font-size: 12px;
+                    border-bottom: 1px solid #464647;
+                    flex-shrink: 0;
+                }}
+                
+                .diff-content {{
+                    overflow: auto;
+                    flex: 1;
+                }}
+                
+                .diff-table {{
+                    display: table;
+                    width: max-content;
+                    min-width: 100%;
+                    border-collapse: separate;
+                    border-spacing: 0;
+                }}
+                
+                .diff-line {{
+                    display: table-row;
+                    height: 28px;
+                }}
+                
+                .diff-line:hover {{
+                    background: rgba(255, 255, 255, 0.05) !important;
+                }}
+                
+                .line-number {{
+                    display: table-cell;
+                    background: #2d2d30;
+                    color: #858585;
+                    padding: 4px 8px;
+                    width: 50px;
+                    min-width: 50px;
+                    max-width: 50px;
+                    text-align: right;
+                    border-right: 1px solid #464647;
+                    position: sticky;
+                    left: 0;
+                    z-index: 5;
+                    user-select: none;
+                    vertical-align: middle;
+                    box-sizing: border-box;
+                }}
+                
+                .line-content {{
+                    display: table-cell;
+                    padding: 0;
+                    vertical-align: middle;
+                }}
+                
+                .cell-data {{
+                    display: inline-block;
+                    padding: 4px 12px;
+                    width: 120px;
+                    min-width: 120px;
+                    border-right: 1px solid #3a3a3a;
+                    border-bottom: 1px solid #3a3a3a;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    vertical-align: middle;
+                    box-sizing: border-box;
+                    height: 28px;
+                    line-height: 20px;
+                }}
+                
+                .cell-data:hover {{
+                    overflow: visible;
+                    background: rgba(255, 255, 255, 0.05);
+                    position: relative;
+                    z-index: 2;
+                    max-width: none;
+                }}
+                
+                .header-row {{
+                    background: #2d2d30 !important;
+                    font-weight: bold;
+                    position: sticky;
+                    top: 0;
+                    z-index: 6;
+                    height: 32px;
+                }}
+                
+                .header-row .cell-data {{
+                    background: #2d2d30;
+                    color: #007ACC;
+                    font-weight: bold;
+                    border-right: 1px solid #464647;
+                    border-bottom: 2px solid #464647;
+                    height: 32px;
+                    line-height: 24px;
+                }}
+                
+                .header-row .line-number {{
+                    background: #2d2d30;
+                    border-bottom: 2px solid #464647;
+                    height: 32px;
+                }}
+                
+                .diff-modified {{
+                    background: rgba(210, 153, 34, 0.15) !important;
+                }}
+                
+                .diff-modified .line-number {{
+                    background: #3d3319 !important;
+                    color: #d29922;
+                }}
+                
+                .cell-empty {{
+                    color: #6a6a6a;
+                    font-style: italic;
+                    opacity: 0.6;
+                }}
+                
+                .cell-value-old {{
+                    background: rgba(229, 83, 75, 0.2);
+                    color: #f85149;
+                    padding: 2px 6px;
+                    border-radius: 2px;
+                    text-decoration: line-through;
+                }}
+                
+                .cell-value-new {{
+                    background: rgba(87, 171, 90, 0.2);
+                    color: #57ab5a;
+                    padding: 2px 6px;
+                    border-radius: 2px;
+                    font-weight: bold;
+                }}
+                
+                /* Scrollbar styling */
+                ::-webkit-scrollbar {{
+                    width: 10px;
+                    height: 10px;
+                }}
+                
+                ::-webkit-scrollbar-track {{
+                    background: #2d2d30;
+                }}
+                
+                ::-webkit-scrollbar-thumb {{
+                    background: #464647;
+                    border-radius: 5px;
+                }}
+                
+                ::-webkit-scrollbar-thumb:hover {{
+                    background: #565658;
+                }}
+                
+                ::-webkit-scrollbar-corner {{
+                    background: #2d2d30;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="diff-container">
+                <div class="diff-header">
+                    📊 Sheet: {sheet_name}
+                    <span class="sync-badge">⟷ SYNCHRONIZED SCROLLING ACTIVE</span>
+                </div>
+                <div class="diff-grid">
+                    <div class="diff-side">
+                        <div class="diff-side-header">📁 Original</div>
+                        <div class="diff-content" id="original-{sheet_id}">
+                            {original_html}
+                        </div>
+                    </div>
+                    <div class="diff-side">
+                        <div class="diff-side-header">📝 Modified</div>
+                        <div class="diff-content" id="modified-{sheet_id}">
+                            {modified_html}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <script>
+                // Synchronized scrolling implementation
+                (function() {{
+                    const original = document.getElementById('original-{sheet_id}');
+                    const modified = document.getElementById('modified-{sheet_id}');
+                    
+                    if (original && modified) {{
+                        let isSyncing = false;
+                        
+                        // Function to sync scroll positions
+                        function syncScroll(source, target) {{
+                            if (!isSyncing) {{
+                                isSyncing = true;
+                                target.scrollTop = source.scrollTop;
+                                target.scrollLeft = source.scrollLeft;
+                                
+                                // Reset flag after a small delay
+                                requestAnimationFrame(() => {{
+                                    isSyncing = false;
+                                }});
+                            }}
+                        }}
+                        
+                        // Add scroll listeners
+                        original.addEventListener('scroll', function() {{
+                            syncScroll(original, modified);
+                        }});
+                        
+                        modified.addEventListener('scroll', function() {{
+                            syncScroll(modified, original);
+                        }});
+                        
+                        // Log that synchronization is active
+                        console.log('✅ Synchronized scrolling activated for sheet: {sheet_name}');
+                    }} else {{
+                        console.error('❌ Could not find elements for synchronization');
+                    }}
+                }})();
+            </script>
+        </body>
+        </html>
+        """
+        
+        return full_html
+    
+    def _generate_table_html(self, df, column_headers, change_map, max_rows, max_cols, is_original=True):
+        """Generate HTML table for one side of the diff"""
+        html_output = '<div class="diff-table">'
+        
+        # Add column headers
+        html_output += '<div class="diff-line header-row"><div class="line-number">⬜</div><div class="line-content">'
+        for col_idx in range(max_cols):
+            col_num = col_idx + 1
+            if col_num in column_headers:
+                header = column_headers[col_num]
+            elif col_idx < len(df.columns) if not df.empty else 0:
+                header = df.columns[col_idx]
+            else:
+                header = get_column_letter(col_num)
+            html_output += f'<div class="cell-data">{html.escape(str(header))}</div>'
+        html_output += '</div></div>'
+        
+        # Add data rows
+        for row_idx in range(max_rows):
+            row_has_changes = any((row_idx, col) in change_map for col in range(max_cols))
+            
+            html_output += f'<div class="diff-line'
+            if row_has_changes:
+                html_output += ' diff-modified'
+            html_output += f'"><div class="line-number">{row_idx + 1}</div><div class="line-content">'
+            
+            for col_idx in range(max_cols):
+                cell_html = '<div class="cell-data">'
+                
+                if not df.empty and row_idx < len(df) and col_idx < len(df.columns):
+                    value = df.iloc[row_idx, col_idx]
+                    
+                    if (row_idx, col_idx) in change_map:
+                        if value is None:
+                            cell_html += '<span class="cell-empty">[empty]</span>'
+                        else:
+                            if is_original:
+                                cell_html += f'<span class="cell-value-old">{html.escape(str(value))}</span>'
+                            else:
+                                cell_html += f'<span class="cell-value-new">{html.escape(str(value))}</span>'
+                    else:
+                        if value is None:
+                            cell_html += '<span class="cell-empty">·</span>'
+                        else:
+                            cell_html += html.escape(str(value))
+                else:
+                    cell_html += '<span class="cell-empty">·</span>'
+                
+                cell_html += '</div>'
+                html_output += cell_html
+            
+            html_output += '</div></div>'
+        
+        html_output += '</div>'
+        return html_output
+    
     def create_vs_code_diff_html(self, sheet_name):
         """Create VS Code style diff visualization for a sheet"""
         sheet_changes = self.changes.get(sheet_name, {})
@@ -456,1294 +858,4 @@ class ExcelDiffVisualizer:
         if sheet_changes.get('sheet_added'):
             return self._create_added_sheet_view(sheet_changes['modified_df'], sheet_name)
         elif sheet_changes.get('sheet_removed'):
-            return self._create_removed_sheet_view(sheet_changes['original_df'], sheet_name)
-        
-        original_df = sheet_changes.get('original_df', pd.DataFrame())
-        modified_df = sheet_changes.get('modified_df', pd.DataFrame())
-        column_headers = sheet_changes.get('column_headers', {})
-        
-        # Get max dimensions
-        max_rows = max(len(original_df) if not original_df.empty else 10,
-                      len(modified_df) if not modified_df.empty else 10,
-                      10)
-        max_cols = max(len(original_df.columns) if not original_df.empty else 5,
-                      len(modified_df.columns) if not modified_df.empty else 5,
-                      5)
-        
-        # Build change map
-        change_map = {}
-        for mod in sheet_changes.get('modifications', []):
-            change_map[(mod['row']-1, mod['col']-1)] = mod
-        
-        # Generate unique ID for this sheet's containers
-        sheet_id = sheet_name.replace(' ', '_').replace('(', '').replace(')', '')
-        
-        html = f"""
-        <div class="diff-container">
-            <div class="diff-header">
-                📊 Sheet: {sheet_name}
-                <span style="background: #007ACC; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; margin-left: 10px;">
-                    📜 Scroll to compare
-                </span>
-            </div>
-            <div class="diff-grid">
-                <div class="diff-side">
-                    <div class="diff-side-header">📁 Original</div>
-                    <div class="diff-content">
-                        <div class="diff-table">
-        """
-        
-        # Add column headers for original
-        html += '<div class="diff-line header-row"><span class="line-number">⬜</span><span class="line-content">'
-        for col_idx in range(max_cols):
-            col_num = col_idx + 1
-            if col_num in column_headers:
-                header = column_headers[col_num]
-            elif col_idx < len(original_df.columns):
-                header = original_df.columns[col_idx]
-            else:
-                header = get_column_letter(col_num)
-            html += f'<span class="cell-data">{html.escape(str(header))}</span>'
-        html += '</span></div>'
-        
-        # Original side - data rows
-        for row_idx in range(max_rows):
-            row_has_changes = any((row_idx, col) in change_map for col in range(max_cols))
-            
-            html += f'<div class="diff-line'
-            if row_has_changes:
-                html += ' diff-modified'
-            html += f'"><span class="line-number">{row_idx + 1}</span><span class="line-content">'
-            
-            for col_idx in range(max_cols):
-                cell_html = '<span class="cell-data">'
-                
-                if row_idx < len(original_df) and col_idx < len(original_df.columns):
-                    value = original_df.iloc[row_idx, col_idx]
-                    
-                    if (row_idx, col_idx) in change_map:
-                        change = change_map[(row_idx, col_idx)]
-                        if value is None:
-                            cell_html += '<span class="cell-empty">[empty]</span>'
-                        else:
-                            cell_html += f'<span class="cell-value-old">{html.escape(str(value))}</span>'
-                    else:
-                        if value is None:
-                            cell_html += '<span class="cell-empty">·</span>'
-                        else:
-                            cell_html += html.escape(str(value))
-                else:
-                    cell_html += '<span class="cell-empty">·</span>'
-                
-                cell_html += '</span>'
-                html += cell_html
-            
-            html += '</span></div>'
-        
-        html += """
-                        </div>
-                    </div>
-                </div>
-                <div class="diff-side">
-                    <div class="diff-side-header">📝 Modified</div>
-                    <div class="diff-content">
-                        <div class="diff-table">
-        """
-        
-        # Add column headers for modified
-        html += '<div class="diff-line header-row"><span class="line-number">⬜</span><span class="line-content">'
-        for col_idx in range(max_cols):
-            col_num = col_idx + 1
-            if col_num in column_headers:
-                header = column_headers[col_num]
-            elif col_idx < len(modified_df.columns):
-                header = modified_df.columns[col_idx]
-            else:
-                header = get_column_letter(col_num)
-            html += f'<span class="cell-data">{html.escape(str(header))}</span>'
-        html += '</span></div>'
-        
-        # Modified side - data rows
-        for row_idx in range(max_rows):
-            row_has_changes = any((row_idx, col) in change_map for col in range(max_cols))
-            
-            html += f'<div class="diff-line'
-            if row_has_changes:
-                html += ' diff-modified'
-            html += f'"><span class="line-number">{row_idx + 1}</span><span class="line-content">'
-            
-            for col_idx in range(max_cols):
-                cell_html = '<span class="cell-data">'
-                
-                if row_idx < len(modified_df) and col_idx < len(modified_df.columns):
-                    value = modified_df.iloc[row_idx, col_idx]
-                    
-                    if (row_idx, col_idx) in change_map:
-                        change = change_map[(row_idx, col_idx)]
-                        if value is None:
-                            cell_html += '<span class="cell-empty">[empty]</span>'
-                        else:
-                            cell_html += f'<span class="cell-value-new">{html.escape(str(value))}</span>'
-                    else:
-                        if value is None:
-                            cell_html += '<span class="cell-empty">·</span>'
-                        else:
-                            cell_html += html.escape(str(value))
-                else:
-                    cell_html += '<span class="cell-empty">·</span>'
-                
-                cell_html += '</span>'
-                html += cell_html
-            
-            html += '</span></div>'
-        
-        html += """
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        """
-        
-        return html
-    
-    def _create_added_sheet_view(self, df, sheet_name):
-        """Create view for entirely added sheet"""
-        html = f"""
-        <div class="diff-container">
-            <div class="diff-header" style="background: #57ab5a; color: white;">
-                📄 New Sheet: {sheet_name}
-            </div>
-            <div style="padding: 20px; background: rgba(87, 171, 90, 0.1); color: #d4d4d4;">
-                <p style="margin-bottom: 15px;">This entire sheet was added. All cells are modifications from [empty] to their current values.</p>
-        """
-        
-        if not df.empty:
-            for row_idx in range(min(len(df), 20)):  # Show first 20 rows
-                html += f'<div class="diff-line diff-modified">'
-                html += f'<span class="line-number">{row_idx + 1}</span>'
-                html += '<span class="line-content">'
-                row_data = []
-                for col_idx in range(len(df.columns)):
-                    value = df.iloc[row_idx, col_idx]
-                    if value is not None:
-                        row_data.append(f'<span class="value-new">{html.escape(str(value))}</span>')
-                    else:
-                        row_data.append('<span class="cell-empty">[empty]</span>')
-                html += ' | '.join(row_data)
-                html += '</span></div>'
-            
-            if len(df) > 20:
-                html += f'<div style="padding: 10px; color: #858585;">... and {len(df) - 20} more rows</div>'
-        
-        html += "</div></div>"
-        return html
-    
-    def create_synchronized_diff_component(self, sheet_name):
-        """Create synchronized diff view using Streamlit components for true scrolling sync"""
-        sheet_changes = self.changes.get(sheet_name, {})
-        
-        if sheet_changes.get('sheet_added') or sheet_changes.get('sheet_removed'):
-            # For added/removed sheets, use the regular view
-            return self.create_vs_code_diff_html(sheet_name)
-        
-        original_df = sheet_changes.get('original_df', pd.DataFrame())
-        modified_df = sheet_changes.get('modified_df', pd.DataFrame())
-        column_headers = sheet_changes.get('column_headers', {})
-        
-        # Get max dimensions
-        max_rows = max(len(original_df) if not original_df.empty else 10,
-                      len(modified_df) if not modified_df.empty else 10, 10)
-        max_cols = max(len(original_df.columns) if not original_df.empty else 5,
-                      len(modified_df.columns) if not modified_df.empty else 5, 5)
-        
-        # Build change map
-        change_map = {}
-        for mod in sheet_changes.get('modifications', []):
-            change_map[(mod['row']-1, mod['col']-1)] = mod
-        
-        # Clean sheet name for IDs
-        sheet_id = sheet_name.replace(' ', '_').replace('(', '').replace(')', '')
-        
-        # Generate HTML for original side
-        original_html = self._generate_table_html(
-            original_df, column_headers, change_map, max_rows, max_cols, is_original=True
-        )
-        
-        # Generate HTML for modified side
-        modified_html = self._generate_table_html(
-            modified_df, column_headers, change_map, max_rows, max_cols, is_original=False
-        )
-        
-        # Create full HTML with embedded JavaScript for synchronized scrolling
-        full_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{
-                    margin: 0;
-                    padding: 0;
-                    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-                    background: #1e1e1e;
-                    color: #d4d4d4;
-                }}
-                
-                .diff-container {{
-                    background: #1e1e1e;
-                    border-radius: 6px;
-                    overflow: hidden;
-                    height: 100vh;
-                    display: flex;
-                    flex-direction: column;
-                }}
-                
-                .diff-header {{
-                    background: #2d2d30;
-                    color: #cccccc;
-                    padding: 10px 15px;
-                    font-weight: bold;
-                    border-bottom: 1px solid #464647;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    flex-shrink: 0;
-                }}
-                
-                .sync-badge {{
-                    background: #28a745;
-                    color: white;
-                    padding: 4px 10px;
-                    border-radius: 4px;
-                    font-size: 11px;
-                    animation: pulse 2s infinite;
-                }}
-                
-                @keyframes pulse {{
-                    0% {{ opacity: 1; }}
-                    50% {{ opacity: 0.7; }}
-                    100% {{ opacity: 1; }}
-                }}
-                
-                .diff-grid {{
-                    display: grid;
-                    grid-template-columns: 1fr 1fr;
-                    gap: 2px;
-                    background: #2d2d30;
-                    padding: 1px;
-                    flex: 1;
-                    overflow: hidden;
-                }}
-                
-                .diff-side {{
-                    background: #1e1e1e;
-                    display: flex;
-                    flex-direction: column;
-                    overflow: hidden;
-                }}
-                
-                .diff-side-header {{
-                    background: #2d2d30;
-                    color: #969696;
-                    padding: 8px 15px;
-                    font-size: 12px;
-                    border-bottom: 1px solid #464647;
-                    flex-shrink: 0;
-                }}
-                
-                .diff-content {{
-                    overflow: auto;
-                    flex: 1;
-                }}
-                
-                .diff-table {{
-                    display: table;
-                    width: max-content;
-                    min-width: 100%;
-                    border-collapse: collapse;
-                }}
-                
-                .diff-line {{
-                    display: table-row;
-                    min-height: 22px;
-                    white-space: nowrap;
-                }}
-                
-                .diff-line:hover {{
-                    background: rgba(255, 255, 255, 0.05) !important;
-                }}
-                
-                .line-number {{
-                    display: table-cell;
-                    background: #2d2d30;
-                    color: #858585;
-                    padding: 2px 8px;
-                    min-width: 40px;
-                    text-align: right;
-                    border-right: 1px solid #464647;
-                    position: sticky;
-                    left: 0;
-                    z-index: 5;
-                    user-select: none;
-                }}
-                
-                .line-content {{
-                    display: table-cell;
-                    padding: 2px 0;
-                    white-space: nowrap;
-                }}
-                
-                .cell-data {{
-                    display: inline-block;
-                    padding: 2px 12px;
-                    min-width: 120px;
-                    border-right: 1px solid #3a3a3a;
-                    white-space: nowrap;
-                }}
-                
-                .header-row {{
-                    background: #2d2d30 !important;
-                    font-weight: bold;
-                    position: sticky;
-                    top: 0;
-                    z-index: 6;
-                }}
-                
-                .header-row .cell-data {{
-                    background: #2d2d30;
-                    color: #007ACC;
-                    font-weight: bold;
-                    border-right: 1px solid #464647;
-                }}
-                
-                .diff-modified {{
-                    background: rgba(210, 153, 34, 0.15) !important;
-                }}
-                
-                .diff-modified .line-number {{
-                    background: #3d3319 !important;
-                    color: #d29922;
-                }}
-                
-                .cell-empty {{
-                    color: #6a6a6a;
-                    font-style: italic;
-                    opacity: 0.6;
-                }}
-                
-                .cell-value-old {{
-                    background: rgba(229, 83, 75, 0.2);
-                    color: #f85149;
-                    padding: 1px 4px;
-                    border-radius: 2px;
-                    text-decoration: line-through;
-                }}
-                
-                .cell-value-new {{
-                    background: rgba(87, 171, 90, 0.2);
-                    color: #57ab5a;
-                    padding: 1px 4px;
-                    border-radius: 2px;
-                    font-weight: bold;
-                }}
-                
-                /* Scrollbar styling */
-                ::-webkit-scrollbar {{
-                    width: 10px;
-                    height: 10px;
-                }}
-                
-                ::-webkit-scrollbar-track {{
-                    background: #2d2d30;
-                }}
-                
-                ::-webkit-scrollbar-thumb {{
-                    background: #464647;
-                    border-radius: 5px;
-                }}
-                
-                ::-webkit-scrollbar-thumb:hover {{
-                    background: #565658;
-                }}
-                
-                ::-webkit-scrollbar-corner {{
-                    background: #2d2d30;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="diff-container">
-                <div class="diff-header">
-                    📊 Sheet: {sheet_name}
-                    <span class="sync-badge">⟷ SYNCHRONIZED SCROLLING ACTIVE</span>
-                </div>
-                <div class="diff-grid">
-                    <div class="diff-side">
-                        <div class="diff-side-header">📁 Original</div>
-                        <div class="diff-content" id="original-{sheet_id}">
-                            {original_html}
-                        </div>
-                    </div>
-                    <div class="diff-side">
-                        <div class="diff-side-header">📝 Modified</div>
-                        <div class="diff-content" id="modified-{sheet_id}">
-                            {modified_html}
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <script>
-                // Synchronized scrolling implementation
-                (function() {{
-                    const original = document.getElementById('original-{sheet_id}');
-                    const modified = document.getElementById('modified-{sheet_id}');
-                    
-                    if (original && modified) {{
-                        let isSyncing = false;
-                        
-                        // Function to sync scroll positions
-                        function syncScroll(source, target) {{
-                            if (!isSyncing) {{
-                                isSyncing = true;
-                                target.scrollTop = source.scrollTop;
-                                target.scrollLeft = source.scrollLeft;
-                                
-                                // Reset flag after a small delay
-                                requestAnimationFrame(() => {{
-                                    isSyncing = false;
-                                }});
-                            }}
-                        }}
-                        
-                        // Add scroll listeners
-                        original.addEventListener('scroll', function() {{
-                            syncScroll(original, modified);
-                        }});
-                        
-                        modified.addEventListener('scroll', function() {{
-                            syncScroll(modified, original);
-                        }});
-                        
-                        // Log that synchronization is active
-                        console.log('✅ Synchronized scrolling activated for sheet: {sheet_name}');
-                    }} else {{
-                        console.error('❌ Could not find elements for synchronization');
-                    }}
-                }})();
-            </script>
-        </body>
-        </html>
-        """
-        
-        return full_html
-    
-    def _generate_table_html(self, df, column_headers, change_map, max_rows, max_cols, is_original=True):
-        """Generate HTML table for one side of the diff"""
-        html_output = '<div class="diff-table">'
-        
-        # Add column headers
-        html_output += '<div class="diff-line header-row"><span class="line-number">⬜</span><span class="line-content">'
-        for col_idx in range(max_cols):
-            col_num = col_idx + 1
-            if col_num in column_headers:
-                header = column_headers[col_num]
-            elif col_idx < len(df.columns) if not df.empty else 0:
-                header = df.columns[col_idx]
-            else:
-                header = get_column_letter(col_num)
-            html_output += f'<span class="cell-data">{html.escape(str(header))}</span>'
-        html_output += '</span></div>'
-        
-        # Add data rows
-        for row_idx in range(max_rows):
-            row_has_changes = any((row_idx, col) in change_map for col in range(max_cols))
-            
-            html_output += f'<div class="diff-line'
-            if row_has_changes:
-                html_output += ' diff-modified'
-            html_output += f'"><span class="line-number">{row_idx + 1}</span><span class="line-content">'
-            
-            for col_idx in range(max_cols):
-                cell_html = '<span class="cell-data">'
-                
-                if not df.empty and row_idx < len(df) and col_idx < len(df.columns):
-                    value = df.iloc[row_idx, col_idx]
-                    
-                    if (row_idx, col_idx) in change_map:
-                        if value is None:
-                            cell_html += '<span class="cell-empty">[empty]</span>'
-                        else:
-                            if is_original:
-                                cell_html += f'<span class="cell-value-old">{html.escape(str(value))}</span>'
-                            else:
-                                cell_html += f'<span class="cell-value-new">{html.escape(str(value))}</span>'
-                    else:
-                        if value is None:
-                            cell_html += '<span class="cell-empty">·</span>'
-                        else:
-                            cell_html += html.escape(str(value))
-                else:
-                    cell_html += '<span class="cell-empty">·</span>'
-                
-                cell_html += '</span>'
-                html_output += cell_html
-            
-            html_output += '</span></div>'
-        
-        html_output += '</div>'
-        return html_output
-    
-    def create_synchronized_diff_component(self, sheet_name):
-        """Create synchronized diff view using Streamlit components for true scrolling sync"""
-        sheet_changes = self.changes.get(sheet_name, {})
-        
-        if sheet_changes.get('sheet_added') or sheet_changes.get('sheet_removed'):
-            # For added/removed sheets, use the regular view
-            return self.create_vs_code_diff_html(sheet_name)
-        
-        original_df = sheet_changes.get('original_df', pd.DataFrame())
-        modified_df = sheet_changes.get('modified_df', pd.DataFrame())
-        column_headers = sheet_changes.get('column_headers', {})
-        
-        # Get max dimensions
-        max_rows = max(len(original_df) if not original_df.empty else 10,
-                      len(modified_df) if not modified_df.empty else 10, 10)
-        max_cols = max(len(original_df.columns) if not original_df.empty else 5,
-                      len(modified_df.columns) if not modified_df.empty else 5, 5)
-        
-        # Build change map
-        change_map = {}
-        for mod in sheet_changes.get('modifications', []):
-            change_map[(mod['row']-1, mod['col']-1)] = mod
-        
-        # Clean sheet name for IDs
-        sheet_id = sheet_name.replace(' ', '_').replace('(', '').replace(')', '')
-        
-        # Generate HTML for original side
-        original_html = self._generate_table_html(
-            original_df, column_headers, change_map, max_rows, max_cols, is_original=True
-        )
-        
-        # Generate HTML for modified side
-        modified_html = self._generate_table_html(
-            modified_df, column_headers, change_map, max_rows, max_cols, is_original=False
-        )
-        
-        # Create full HTML with embedded JavaScript for synchronized scrolling
-        full_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{
-                    margin: 0;
-                    padding: 0;
-                    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-                    background: #1e1e1e;
-                    color: #d4d4d4;
-                }}
-                
-                .diff-container {{
-                    background: #1e1e1e;
-                    border-radius: 6px;
-                    overflow: hidden;
-                    height: 100vh;
-                    display: flex;
-                    flex-direction: column;
-                }}
-                
-                .diff-header {{
-                    background: #2d2d30;
-                    color: #cccccc;
-                    padding: 10px 15px;
-                    font-weight: bold;
-                    border-bottom: 1px solid #464647;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    flex-shrink: 0;
-                }}
-                
-                .sync-badge {{
-                    background: #28a745;
-                    color: white;
-                    padding: 4px 10px;
-                    border-radius: 4px;
-                    font-size: 11px;
-                    animation: pulse 2s infinite;
-                }}
-                
-                @keyframes pulse {{
-                    0% {{ opacity: 1; }}
-                    50% {{ opacity: 0.7; }}
-                    100% {{ opacity: 1; }}
-                }}
-                
-                .diff-grid {{
-                    display: grid;
-                    grid-template-columns: 1fr 1fr;
-                    gap: 2px;
-                    background: #2d2d30;
-                    padding: 1px;
-                    flex: 1;
-                    overflow: hidden;
-                }}
-                
-                .diff-side {{
-                    background: #1e1e1e;
-                    display: flex;
-                    flex-direction: column;
-                    overflow: hidden;
-                }}
-                
-                .diff-side-header {{
-                    background: #2d2d30;
-                    color: #969696;
-                    padding: 8px 15px;
-                    font-size: 12px;
-                    border-bottom: 1px solid #464647;
-                    flex-shrink: 0;
-                }}
-                
-                .diff-content {{
-                    overflow: auto;
-                    flex: 1;
-                }}
-                
-                .diff-table {{
-                    display: table;
-                    width: max-content;
-                    min-width: 100%;
-                    border-collapse: collapse;
-                }}
-                
-                .diff-line {{
-                    display: table-row;
-                    min-height: 22px;
-                    white-space: nowrap;
-                }}
-                
-                .diff-line:hover {{
-                    background: rgba(255, 255, 255, 0.05) !important;
-                }}
-                
-                .line-number {{
-                    display: table-cell;
-                    background: #2d2d30;
-                    color: #858585;
-                    padding: 2px 8px;
-                    min-width: 40px;
-                    text-align: right;
-                    border-right: 1px solid #464647;
-                    position: sticky;
-                    left: 0;
-                    z-index: 5;
-                    user-select: none;
-                }}
-                
-                .line-content {{
-                    display: table-cell;
-                    padding: 2px 0;
-                    white-space: nowrap;
-                }}
-                
-                .cell-data {{
-                    display: inline-block;
-                    padding: 2px 12px;
-                    min-width: 120px;
-                    border-right: 1px solid #3a3a3a;
-                    white-space: nowrap;
-                }}
-                
-                .header-row {{
-                    background: #2d2d30 !important;
-                    font-weight: bold;
-                    position: sticky;
-                    top: 0;
-                    z-index: 6;
-                }}
-                
-                .header-row .cell-data {{
-                    background: #2d2d30;
-                    color: #007ACC;
-                    font-weight: bold;
-                    border-right: 1px solid #464647;
-                }}
-                
-                .diff-modified {{
-                    background: rgba(210, 153, 34, 0.15) !important;
-                }}
-                
-                .diff-modified .line-number {{
-                    background: #3d3319 !important;
-                    color: #d29922;
-                }}
-                
-                .cell-empty {{
-                    color: #6a6a6a;
-                    font-style: italic;
-                    opacity: 0.6;
-                }}
-                
-                .cell-value-old {{
-                    background: rgba(229, 83, 75, 0.2);
-                    color: #f85149;
-                    padding: 1px 4px;
-                    border-radius: 2px;
-                    text-decoration: line-through;
-                }}
-                
-                .cell-value-new {{
-                    background: rgba(87, 171, 90, 0.2);
-                    color: #57ab5a;
-                    padding: 1px 4px;
-                    border-radius: 2px;
-                    font-weight: bold;
-                }}
-                
-                /* Scrollbar styling */
-                ::-webkit-scrollbar {{
-                    width: 10px;
-                    height: 10px;
-                }}
-                
-                ::-webkit-scrollbar-track {{
-                    background: #2d2d30;
-                }}
-                
-                ::-webkit-scrollbar-thumb {{
-                    background: #464647;
-                    border-radius: 5px;
-                }}
-                
-                ::-webkit-scrollbar-thumb:hover {{
-                    background: #565658;
-                }}
-                
-                ::-webkit-scrollbar-corner {{
-                    background: #2d2d30;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="diff-container">
-                <div class="diff-header">
-                    📊 Sheet: {sheet_name}
-                    <span class="sync-badge">⟷ SYNCHRONIZED SCROLLING ACTIVE</span>
-                </div>
-                <div class="diff-grid">
-                    <div class="diff-side">
-                        <div class="diff-side-header">📁 Original</div>
-                        <div class="diff-content" id="original-{sheet_id}">
-                            {original_html}
-                        </div>
-                    </div>
-                    <div class="diff-side">
-                        <div class="diff-side-header">📝 Modified</div>
-                        <div class="diff-content" id="modified-{sheet_id}">
-                            {modified_html}
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <script>
-                // Synchronized scrolling implementation
-                (function() {{
-                    const original = document.getElementById('original-{sheet_id}');
-                    const modified = document.getElementById('modified-{sheet_id}');
-                    
-                    if (original && modified) {{
-                        let isSyncing = false;
-                        
-                        // Function to sync scroll positions
-                        function syncScroll(source, target) {{
-                            if (!isSyncing) {{
-                                isSyncing = true;
-                                target.scrollTop = source.scrollTop;
-                                target.scrollLeft = source.scrollLeft;
-                                
-                                // Reset flag after a small delay
-                                requestAnimationFrame(() => {{
-                                    isSyncing = false;
-                                }});
-                            }}
-                        }}
-                        
-                        // Add scroll listeners
-                        original.addEventListener('scroll', function() {{
-                            syncScroll(original, modified);
-                        }});
-                        
-                        modified.addEventListener('scroll', function() {{
-                            syncScroll(modified, original);
-                        }});
-                        
-                        // Log that synchronization is active
-                        console.log('✅ Synchronized scrolling activated for sheet: {sheet_name}');
-                    }} else {{
-                        console.error('❌ Could not find elements for synchronization');
-                    }}
-                }})();
-            </script>
-        </body>
-        </html>
-        """
-        
-        return full_html
-    
-    def _generate_table_html(self, df, column_headers, change_map, max_rows, max_cols, is_original=True):
-        """Generate HTML table for one side of the diff"""
-        html_output = '<div class="diff-table">'
-        
-        # Add column headers
-        html_output += '<div class="diff-line header-row"><span class="line-number">⬜</span><span class="line-content">'
-        for col_idx in range(max_cols):
-            col_num = col_idx + 1
-            if col_num in column_headers:
-                header = column_headers[col_num]
-            elif col_idx < len(df.columns) if not df.empty else 0:
-                header = df.columns[col_idx]
-            else:
-                header = get_column_letter(col_num)
-            html_output += f'<span class="cell-data">{html.escape(str(header))}</span>'
-        html_output += '</span></div>'
-        
-        # Add data rows
-        for row_idx in range(max_rows):
-            row_has_changes = any((row_idx, col) in change_map for col in range(max_cols))
-            
-            html_output += f'<div class="diff-line'
-            if row_has_changes:
-                html_output += ' diff-modified'
-            html_output += f'"><span class="line-number">{row_idx + 1}</span><span class="line-content">'
-            
-            for col_idx in range(max_cols):
-                cell_html = '<span class="cell-data">'
-                
-                if not df.empty and row_idx < len(df) and col_idx < len(df.columns):
-                    value = df.iloc[row_idx, col_idx]
-                    
-                    if (row_idx, col_idx) in change_map:
-                        if value is None:
-                            cell_html += '<span class="cell-empty">[empty]</span>'
-                        else:
-                            if is_original:
-                                cell_html += f'<span class="cell-value-old">{html.escape(str(value))}</span>'
-                            else:
-                                cell_html += f'<span class="cell-value-new">{html.escape(str(value))}</span>'
-                    else:
-                        if value is None:
-                            cell_html += '<span class="cell-empty">·</span>'
-                        else:
-                            cell_html += html.escape(str(value))
-                else:
-                    cell_html += '<span class="cell-empty">·</span>'
-                
-                cell_html += '</span>'
-                html_output += cell_html
-            
-            html_output += '</span></div>'
-        
-        html_output += '</div>'
-        return html_output
-
-# Main Streamlit App
-def main():
-    st.title("🔍 Excel Diff Visualizer")
-    st.markdown("All changes shown as modifications - from original value to new value")
-    
-    # Sidebar for file upload
-    with st.sidebar:
-        st.header("📁 Upload Files")
-        
-        original_file = st.file_uploader(
-            "Upload Original Template", 
-            type=['xlsx', 'xls'],
-            help="Upload the original Excel template"
-        )
-        
-        modified_file = st.file_uploader(
-            "Upload Modified Version", 
-            type=['xlsx', 'xls'],
-            help="Upload the modified Excel file"
-        )
-        
-        st.divider()
-        
-        # View options
-        st.header("⚙️ View Options")
-        view_mode = st.radio(
-            "Display Mode",
-            ["Side-by-Side Diff", "Change List", "Summary Only"],
-            index=0,
-            help="Side-by-Side shows both versions with horizontal scrolling"
-        )
-        
-        show_empty_changes = st.checkbox("Show [empty] → value changes", value=True)
-        
-        if st.button("🔍 Compare Files", type="primary", disabled=not (original_file and modified_file)):
-            if original_file and modified_file:
-                with st.spinner("Analyzing modifications..."):
-                    st.session_state['original_file'] = original_file
-                    st.session_state['modified_file'] = modified_file
-                    
-                    visualizer = ExcelDiffVisualizer(original_file, modified_file)
-                    changes = visualizer.compare_sheets()
-                    
-                    st.session_state['changes'] = changes
-                    st.session_state['visualizer'] = visualizer
-                    st.session_state['comparison_done'] = True
-    
-    # Main content area
-    if 'comparison_done' in st.session_state and st.session_state['comparison_done']:
-        visualizer = st.session_state['visualizer']
-        changes = st.session_state['changes']
-        
-        # Summary Statistics
-        st.markdown("### 📊 Modification Summary")
-        
-        stats_html = f"""
-        <div class="stats-container">
-            <div class="stat-card">
-                <div class="stat-number">{visualizer.summary['total_modifications']}</div>
-                <div class="stat-label">Total Modifications</div>
-            </div>
-            <div class="stat-card from-empty">
-                <div class="stat-number">{visualizer.summary['blank_to_value']}</div>
-                <div class="stat-label">[empty] → Value</div>
-            </div>
-            <div class="stat-card to-empty">
-                <div class="stat-number">{visualizer.summary['value_to_blank']}</div>
-                <div class="stat-label">Value → [empty]</div>
-            </div>
-            <div class="stat-card modified">
-                <div class="stat-number">{visualizer.summary['value_to_value']}</div>
-                <div class="stat-label">Value → Value</div>
-            </div>
-        </div>
-        """
-        st.markdown(stats_html, unsafe_allow_html=True)
-        
-        # Sheet navigation
-        if visualizer.summary['sheets_modified']:
-            st.markdown("### 📑 Sheet Modifications")
-            
-            if view_mode == "Side-by-Side Diff":
-                # VS Code style diff view with synchronized scrolling
-                st.success("✅ **Synchronized Scrolling Active**: Both panels scroll together horizontally and vertically!")
-                
-                sheet_tabs = st.tabs(visualizer.summary['sheets_modified'])
-                
-                for idx, sheet_name in enumerate(visualizer.summary['sheets_modified']):
-                    with sheet_tabs[idx]:
-                        # Clean sheet name
-                        clean_name = sheet_name.replace(" (New Sheet)", "").replace(" (Sheet Removed)", "")
-                        
-                        # Get the synchronized diff HTML
-                        sheet_changes = changes.get(clean_name, {})
-                        
-                        if sheet_changes and not sheet_changes.get('sheet_added') and not sheet_changes.get('sheet_removed'):
-                            # Use components for synchronized scrolling
-                            diff_html = visualizer.create_synchronized_diff_component(clean_name)
-                            components.html(diff_html, height=600, scrolling=False)
-                        else:
-                            # For added/removed sheets, use regular display
-                            diff_html = visualizer.create_vs_code_diff_html(clean_name)
-                            st.markdown(diff_html, unsafe_allow_html=True)
-                        
-                        # Quick stats for this sheet
-                        if sheet_changes and sheet_changes.get('modifications'):
-                            st.markdown("---")
-                            
-                            # Count change types
-                            blank_to_value = sum(1 for m in sheet_changes['modifications'] if m['change_type'] == 'blank_to_value')
-                            value_to_blank = sum(1 for m in sheet_changes['modifications'] if m['change_type'] == 'value_to_blank')
-                            value_to_value = sum(1 for m in sheet_changes['modifications'] if m['change_type'] == 'value_to_value')
-                            
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("[empty] → Value", blank_to_value)
-                            with col2:
-                                st.metric("Value → [empty]", value_to_blank)
-                            with col3:
-                                st.metric("Value → Value", value_to_value)
-            
-            elif view_mode == "Change List":
-                # List all modifications
-                for sheet_name in visualizer.summary['sheets_modified']:
-                    clean_name = sheet_name.replace(" (New Sheet)", "").replace(" (Sheet Removed)", "")
-                    sheet_changes = changes.get(clean_name, {})
-                    
-                    with st.expander(f"📋 {sheet_name}", expanded=True):
-                        if sheet_changes.get('modifications'):
-                            # Group modifications by type
-                            mods = sheet_changes['modifications']
-                            
-                            # Filter based on user preference
-                            if not show_empty_changes:
-                                mods = [m for m in mods if m['change_type'] == 'value_to_value']
-                            
-                            if mods:
-                                st.markdown(f"**{len(mods)} modifications found:**")
-                                
-                                # Show first 20 modifications with column names
-                                for mod in mods[:20]:
-                                    old_val = visualizer._format_value(mod['old_value'])
-                                    new_val = visualizer._format_value(mod['new_value'])
-                                    
-                                    # Use column name if available, otherwise use cell reference
-                                    if 'column_name' in mod:
-                                        location = f"{mod['column_name']}, Row {mod['row_number']}"
-                                    else:
-                                        location = f"Cell {mod['cell_ref']}"
-                                    
-                                    change_html = f"""
-                                    <div class="change-item">
-                                        <span class="change-location">{location}</span>
-                                        <span class="change-arrow">→</span>
-                                        Modified from <span class="value-old">{html.escape(old_val)}</span> 
-                                        to <span class="value-new">{html.escape(new_val)}</span>
-                                    </div>
-                                    """
-                                    st.markdown(change_html, unsafe_allow_html=True)
-                                
-                                if len(mods) > 20:
-                                    st.info(f"... and {len(mods) - 20} more modifications")
-                            else:
-                                st.info("No modifications to display (check filter settings)")
-            
-            else:  # Summary Only
-                st.markdown("### Summary View")
-                summary_data = []
-                
-                for sheet_name in visualizer.summary['sheets_modified']:
-                    clean_name = sheet_name.replace(" (New Sheet)", "").replace(" (Sheet Removed)", "")
-                    sheet_changes = changes.get(clean_name, {})
-                    
-                    if sheet_changes.get('modifications'):
-                        mods = sheet_changes['modifications']
-                        
-                        blank_to_value = sum(1 for m in mods if m['change_type'] == 'blank_to_value')
-                        value_to_blank = sum(1 for m in mods if m['change_type'] == 'value_to_blank')
-                        value_to_value = sum(1 for m in mods if m['change_type'] == 'value_to_value')
-                        
-                        summary_data.append({
-                            'Sheet': sheet_name,
-                            '[empty] → Value': blank_to_value,
-                            'Value → [empty]': value_to_blank,
-                            'Value → Value': value_to_value,
-                            'Total': len(mods)
-                        })
-                
-                if summary_data:
-                    summary_df = pd.DataFrame(summary_data)
-                    st.dataframe(
-                        summary_df,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Sheet": st.column_config.TextColumn("Sheet Name", width="medium"),
-                            "[empty] → Value": st.column_config.NumberColumn("Empty→Value", format="%d"),
-                            "Value → [empty]": st.column_config.NumberColumn("Value→Empty", format="%d"),
-                            "Value → Value": st.column_config.NumberColumn("Value→Value", format="%d"),
-                            "Total": st.column_config.NumberColumn("Total Mods", format="%d"),
-                        }
-                    )
-        else:
-            st.info("✅ No modifications detected between the files")
-        
-        # Export section
-        st.markdown("---")
-        st.markdown("### 💾 Export Options")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("📄 Export Change Report", type="secondary"):
-                # Generate detailed text report
-                report = f"""EXCEL MODIFICATION REPORT
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-SUMMARY
-=======
-Total Modifications: {visualizer.summary['total_modifications']}
-- [empty] → Value: {visualizer.summary['blank_to_value']}
-- Value → [empty]: {visualizer.summary['value_to_blank']}
-- Value → Value: {visualizer.summary['value_to_value']}
-
-DETAILED CHANGES BY SHEET
-========================
-"""
-                for sheet_name in visualizer.summary['sheets_modified']:
-                    clean_name = sheet_name.replace(" (New Sheet)", "").replace(" (Sheet Removed)", "")
-                    sheet_changes = changes.get(clean_name, {})
-                    
-                    if sheet_changes.get('modifications'):
-                        report += f"\n\nSheet: {sheet_name}\n"
-                        report += "-" * (len(sheet_name) + 7) + "\n"
-                        
-                        for mod in sheet_changes['modifications']:
-                            old_val = visualizer._format_value(mod['old_value'])
-                            new_val = visualizer._format_value(mod['new_value'])
-                            
-                            # Use column name if available
-                            if 'column_name' in mod:
-                                location = f"{mod['column_name']}, Row {mod['row_number']}"
-                            else:
-                                location = mod['cell_ref']
-                            
-                            report += f"  {location}: {old_val} → {new_val}\n"
-                
-                st.download_button(
-                    label="⬇️ Download Report",
-                    data=report,
-                    file_name=f"excel_modifications_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain"
-                )
-        
-        with col2:
-            if st.button("📊 Export Diff Excel", type="secondary"):
-                # Create diff Excel with highlighting
-                diff_wb = openpyxl.Workbook()
-                diff_wb.remove(diff_wb.active)
-                
-                # Color for modifications
-                yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
-                
-                for sheet_name, sheet_changes in changes.items():
-                    if sheet_changes['sheet_removed']:
-                        continue
-                    
-                    diff_sheet = diff_wb.create_sheet(sheet_name)
-                    
-                    # Use modified version as base
-                    if sheet_name in visualizer.modified_wb.sheetnames:
-                        source_sheet = visualizer.modified_wb[sheet_name]
-                        
-                        # Copy all cells and highlight modifications
-                        for row in source_sheet.iter_rows():
-                            for cell in row:
-                                new_cell = diff_sheet.cell(row=cell.row, column=cell.column, value=cell.value)
-                                
-                                # Check if this cell was modified
-                                for mod in sheet_changes.get('modifications', []):
-                                    if mod['cell'] == (cell.row, cell.column):
-                                        new_cell.fill = yellow_fill
-                                        old_val = visualizer._format_value(mod['old_value'])
-                                        new_val = visualizer._format_value(mod['new_value'])
-                                        
-                                        # Include column name in comment
-                                        col_name = mod.get('column_name', mod['cell_ref'])
-                                        comment_text = f"Location: {col_name}, Row {mod['row_number']}\n"
-                                        comment_text += f"Modified from: {old_val}\n"
-                                        comment_text += f"Modified to: {new_val}"
-                                        
-                                        new_cell.comment = openpyxl.comments.Comment(
-                                            comment_text, 
-                                            "Diff Tool"
-                                        )
-                                        break
-                
-                # Add summary sheet
-                summary_sheet = diff_wb.create_sheet("MODIFICATION_SUMMARY", 0)
-                summary_data = [
-                    ["Excel Modification Report", ""],
-                    ["Generated:", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-                    ["", ""],
-                    ["Total Modifications:", visualizer.summary['total_modifications']],
-                    ["[empty] → Value:", visualizer.summary['blank_to_value']],
-                    ["Value → [empty]:", visualizer.summary['value_to_blank']],
-                    ["Value → Value:", visualizer.summary['value_to_value']],
-                    ["", ""],
-                    ["Sheets Modified:", ", ".join(visualizer.summary['sheets_modified']) if visualizer.summary['sheets_modified'] else "None"],
-                ]
-                
-                for row_idx, row_data in enumerate(summary_data, 1):
-                    for col_idx, value in enumerate(row_data, 1):
-                        cell = summary_sheet.cell(row=row_idx, column=col_idx, value=value)
-                        if row_idx == 1:
-                            cell.font = Font(bold=True, size=14)
-                        elif col_idx == 1 and row_idx > 3:
-                            cell.font = Font(bold=True)
-                
-                excel_buffer = io.BytesIO()
-                diff_wb.save(excel_buffer)
-                excel_buffer.seek(0)
-                
-                st.download_button(
-                    label="⬇️ Download Diff Excel",
-                    data=excel_buffer,
-                    file_name=f"excel_diff_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-        
-        with col3:
-            if st.button("📋 Export JSON", type="secondary"):
-                # Prepare JSON export
-                change_report = {
-                    'summary': visualizer.summary,
-                    'modifications_by_sheet': {},
-                    'timestamp': datetime.now().isoformat()
-                }
-                
-                for sheet_name, sheet_changes in changes.items():
-                    if sheet_changes.get('modifications'):
-                        change_report['modifications_by_sheet'][sheet_name] = [
-                            {
-                                'cell': mod['cell_ref'],
-                                'location': f"{mod.get('column_name', mod['cell_ref'])}, Row {mod['row_number']}",
-                                'column': mod.get('column_name', get_column_letter(mod['col'])),
-                                'row': mod['row_number'],
-                                'from': visualizer._format_value(mod['old_value']),
-                                'to': visualizer._format_value(mod['new_value']),
-                                'type': mod['change_type']
-                            }
-                            for mod in sheet_changes['modifications']
-                        ]
-                
-                json_str = json.dumps(change_report, indent=2, default=str)
-                
-                st.download_button(
-                    label="⬇️ Download JSON",
-                    data=json_str,
-                    file_name=f"modifications_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-    
-    else:
-        # Welcome screen
-        st.markdown("""
-        ### Welcome to Excel Diff Visualizer! 
-        
-        This tool treats all Excel changes as **modifications** with enhanced features:
-        
-        #### 🎯 Key Features:
-        - **Everything is a modification**: No "added" or "removed" - just "modified from X to Y"
-        - **✨ SYNCHRONIZED SCROLLING**: Both panels scroll together (horizontal & vertical)
-        - **Horizontal scrolling**: Clean table view with no line wrapping for wide spreadsheets
-        - **Column header names**: Changes shown as "Q1 2024, Row 2" instead of "Cell B2"
-        - **[empty] notation**: Clear indication when cells are blank
-        
-        #### 📊 Change Types:
-        - 🔄 **[empty] → Value**: When a blank cell gets a value
-        - 🔄 **Value → [empty]**: When a cell value is cleared
-        - 🔄 **Value → Value**: When a cell value changes
-        
-        #### 🖥️ View Options:
-        - **Side-by-Side Diff**: VS Code-style with **SYNCHRONIZED** scrolling (scroll one side, both move!)
-        - **Change List**: Shows modifications with column names (e.g., "Product Name, Row 5")
-        - **Summary View**: High-level statistics table
-        
-        **To get started:**
-        1. Upload your original Excel template in the sidebar
-        2. Upload the modified version from your client
-        3. Click "Compare Files" to see all modifications
-        
-        The diff view now features **synchronized scrolling** - when you scroll one panel, the other 
-        automatically follows, making it incredibly easy to compare changes across wide spreadsheets!
-        """)
-
-if __name__ == "__main__":
-    main()
+            return self._create_removed_sheet_view(sheet_changes['original_df'], sheet
