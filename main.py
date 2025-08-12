@@ -698,7 +698,8 @@ def main():
         view_mode = st.radio(
             "Display Mode",
             ["Side-by-Side Diff", "Change List", "Summary Only"],
-            index=0
+            index=0,
+            help="Side-by-Side shows both versions with horizontal scrolling"
         )
         
         show_empty_changes = st.checkbox("Show [empty] → value changes", value=True)
@@ -752,6 +753,8 @@ def main():
             
             if view_mode == "Side-by-Side Diff":
                 # VS Code style diff view
+                st.info("💡 **Tip**: Scroll each panel independently to compare changes. Both panels support horizontal scrolling for wide spreadsheets.")
+                
                 sheet_tabs = st.tabs(visualizer.summary['sheets_modified'])
                 
                 for idx, sheet_name in enumerate(visualizer.summary['sheets_modified']):
