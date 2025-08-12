@@ -1,934 +1,528 @@
-import streamlit as st
-import pandas as pd
-import openpyxl
-from openpyxl.styles import PatternFill, Font, Border, Side
-from openpyxl.utils import get_column_letter
-import numpy as np
-from datetime import datetime
-import json
-import io
-import base64
-from pathlib import Path
-import difflib
-import html
-
-# Page configuration
-st.set_page_config(
-    page_title="Excel Diff Visualizer",
-    page_icon="🔍",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS for VS Code-style diff visualization
-st.markdown("""
-<style>
-    .diff-container {
-        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-        font-size: 13px;
-        background: #1e1e1e;
-        border-radius: 6px;
-        padding: 10px;
-        margin: 10px 0;
-        overflow-x: auto;
-    }
-    
-    .diff-header {
-        background: #2d2d30;
-        color: #cccccc;
-        padding: 8px 12px;
-        border-radius: 4px 4px 0 0;
-        font-weight: bold;
-        border-bottom: 1px solid #464647;
-    }
-    
-    .diff-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 2px;
-        background: #2d2d30;
-        padding: 1px;
-    }
-    
-    .diff-side {
-        background: #1e1e1e;
-        overflow-x: auto;
-    }
-    
-    .diff-side-header {
-        background: #2d2d30;
-        color: #969696;
-        padding: 6px 12px;
-        font-size: 12px;
-        border-bottom: 1px solid #464647;
-        position: sticky;
-        top: 0;
-        z-index: 10;
-    }
-    
-    .diff-line {
-        display: flex;
-        align-items: center;
-        min-height: 22px;
-        white-space: pre;
-        font-family: monospace;
-    }
-    
-    .line-number {
-        background: #2d2d30;
-        color: #858585;
-        padding: 0 8px;
-        min-width: 40px;
-        text-align: right;
-        border-right: 1px solid #464647;
-        user-select: none;
-    }
-    
-    .line-content {
-        flex: 1;
-        padding: 0 12px;
-        white-space: pre-wrap;
-        word-break: break-all;
-    }
-    
-    /* Diff highlighting colors - VS Code style */
-    .diff-modified {
-        background: rgba(210, 153, 34, 0.15) !important;
-        border-left: 3px solid #d29922;
-    }
-    
-    .diff-unchanged {
-        background: #1e1e1e;
-        color: #d4d4d4;
-    }
-    
-    /* Cell highlighting for modifications */
-    .cell-empty {
-        color: #6a6a6a;
-        font-style: italic;
-        opacity: 0.6;
-    }
-    
-    .cell-value-old {
-        background: rgba(229, 83, 75, 0.2) !important;
-        color: #f85149 !important;
-        padding: 2px 4px;
-        border-radius: 2px;
-        text-decoration: line-through;
-    }
-    
-    .cell-value-new {
-        background: rgba(87, 171, 90, 0.2) !important;
-        color: #57ab5a !important;
-        padding: 2px 4px;
-        border-radius: 2px;
-        font-weight: bold;
-    }
-    
-    /* Stats cards */
-    .stats-container {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 15px;
-        margin: 20px 0;
-    }
-    
-    .stat-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 20px;
-        border-radius: 10px;
-        color: white;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    
-    .stat-card.modified {
-        background: linear-gradient(135deg, #d29922 0%, #b87c1b 100%);
-    }
-    
-    .stat-card.to-empty {
-        background: linear-gradient(135deg, #e5534b 0%, #c73e36 100%);
-    }
-    
-    .stat-card.from-empty {
-        background: linear-gradient(135deg, #57ab5a 0%, #40916c 100%);
-    }
-    
-    .stat-number {
-        font-size: 32px;
-        font-weight: bold;
-        margin-bottom: 5px;
-    }
-    
-    .stat-label {
-        font-size: 14px;
-        opacity: 0.9;
-    }
-    
-    /* Sync scroll indicator */
-    .sync-indicator {
-        background: #007ACC;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 11px;
-        margin-left: 10px;
-    }
-    
-    /* Change list styling */
-    .change-item {
-        background: #2d2d30;
-        border: 1px solid #464647;
-        border-radius: 4px;
-        padding: 10px;
-        margin: 5px 0;
-        font-family: monospace;
-    }
-    
-    .change-location {
-        color: #007ACC;
-        font-weight: bold;
-    }
-    
-    .change-arrow {
-        color: #d29922;
-        margin: 0 8px;
-    }
-    
-    .value-empty {
-        color: #6a6a6a;
-        font-style: italic;
-    }
-    
-    .value-old {
-        color: #f85149;
-        text-decoration: line-through;
-    }
-    
-    .value-new {
-        color: #57ab5a;
-        font-weight: bold;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-class ExcelDiffVisualizer:
-    def __init__(self, original_file, modified_file):
-        self.original_wb = openpyxl.load_workbook(original_file, data_only=True)
-        self.modified_wb = openpyxl.load_workbook(modified_file, data_only=True)
-        self.changes = {}
-        self.summary = {
-            'total_modifications': 0,
-            'sheets_modified': [],
-            'blank_to_value': 0,  # Previously "added"
-            'value_to_blank': 0,  # Previously "removed"
-            'value_to_value': 0,  # Previously "modified"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel Diff - All Changes as Modifications</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            margin: 0;
+            padding: 20px;
         }
-    
-    def get_sheet_as_dataframe(self, sheet):
-        """Convert sheet to DataFrame for easier comparison"""
-        data = []
-        max_row = sheet.max_row
-        max_col = sheet.max_column
         
-        for row in range(1, max_row + 1):
-            row_data = []
-            for col in range(1, max_col + 1):
-                cell = sheet.cell(row=row, column=col)
-                # Store None for empty cells to distinguish from empty string
-                row_data.append(cell.value if cell.value is not None else None)
-            data.append(row_data)
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
         
-        # Create column headers
-        columns = [get_column_letter(i) for i in range(1, max_col + 1)]
+        h1 {
+            color: #007ACC;
+            margin-bottom: 10px;
+        }
         
-        if data:
-            df = pd.DataFrame(data, columns=columns[:len(data[0])])
-        else:
-            df = pd.DataFrame()
+        .subtitle {
+            color: #858585;
+            margin-bottom: 30px;
+        }
         
-        return df
-    
-    def compare_sheets(self):
-        """Compare all sheets in the workbooks"""
-        all_sheets = set(self.original_wb.sheetnames) | set(self.modified_wb.sheetnames)
+        /* Stats Cards */
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 30px 0;
+        }
         
-        for sheet_name in all_sheets:
-            sheet_changes = {
-                'modifications': [],  # All changes are now modifications
-                'sheet_added': False,
-                'sheet_removed': False,
-                'original_df': None,
-                'modified_df': None
-            }
-            
-            # Check if sheet exists in both workbooks
-            if sheet_name not in self.original_wb.sheetnames:
-                sheet_changes['sheet_added'] = True
-                sheet_changes['modified_df'] = self.get_sheet_as_dataframe(self.modified_wb[sheet_name])
-                self.summary['sheets_modified'].append(f"{sheet_name} (New Sheet)")
-            elif sheet_name not in self.modified_wb.sheetnames:
-                sheet_changes['sheet_removed'] = True
-                sheet_changes['original_df'] = self.get_sheet_as_dataframe(self.original_wb[sheet_name])
-                self.summary['sheets_modified'].append(f"{sheet_name} (Sheet Removed)")
-            else:
-                # Get both sheets as DataFrames
-                original_sheet = self.original_wb[sheet_name]
-                modified_sheet = self.modified_wb[sheet_name]
-                
-                sheet_changes['original_df'] = self.get_sheet_as_dataframe(original_sheet)
-                sheet_changes['modified_df'] = self.get_sheet_as_dataframe(modified_sheet)
-                
-                # Get max dimensions for both sheets
-                max_row = max(original_sheet.max_row, modified_sheet.max_row, 10)  # At least 10 rows
-                max_col = max(original_sheet.max_column, modified_sheet.max_column, 5)  # At least 5 columns
-                
-                # Compare all cells in the grid
-                has_changes = False
-                for row in range(1, max_row + 1):
-                    for col in range(1, max_col + 1):
-                        orig_cell = original_sheet.cell(row=row, column=col)
-                        mod_cell = modified_sheet.cell(row=row, column=col)
-                        
-                        orig_val = orig_cell.value
-                        mod_val = mod_cell.value
-                        
-                        # Only track if there's an actual change
-                        if orig_val != mod_val:
-                            change_type = self._categorize_change(orig_val, mod_val)
-                            
-                            sheet_changes['modifications'].append({
-                                'cell': (row, col),
-                                'cell_ref': f"{get_column_letter(col)}{row}",
-                                'old_value': orig_val,
-                                'new_value': mod_val,
-                                'row': row,
-                                'col': col,
-                                'change_type': change_type
-                            })
-                            
-                            # Update summary
-                            if change_type == 'blank_to_value':
-                                self.summary['blank_to_value'] += 1
-                            elif change_type == 'value_to_blank':
-                                self.summary['value_to_blank'] += 1
-                            else:
-                                self.summary['value_to_value'] += 1
-                            
-                            has_changes = True
-                            self.summary['total_modifications'] += 1
-                
-                if has_changes:
-                    self.summary['sheets_modified'].append(sheet_name)
-            
-            self.changes[sheet_name] = sheet_changes
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
         
-        return self.changes
-    
-    def _categorize_change(self, old_value, new_value):
-        """Categorize the type of modification"""
-        if old_value is None and new_value is not None:
-            return 'blank_to_value'
-        elif old_value is not None and new_value is None:
-            return 'value_to_blank'
-        else:
-            return 'value_to_value'
-    
-    def _format_value(self, value):
-        """Format value for display"""
-        if value is None:
-            return "[empty]"
-        elif isinstance(value, (int, float)):
-            return str(value)
-        else:
-            return str(value)
-    
-    def create_vs_code_diff_html(self, sheet_name):
-        """Create VS Code style diff visualization for a sheet"""
-        sheet_changes = self.changes.get(sheet_name, {})
+        .stat-card.from-empty {
+            background: linear-gradient(135deg, #57ab5a 0%, #40916c 100%);
+        }
         
-        if sheet_changes.get('sheet_added'):
-            return self._create_added_sheet_view(sheet_changes['modified_df'], sheet_name)
-        elif sheet_changes.get('sheet_removed'):
-            return self._create_removed_sheet_view(sheet_changes['original_df'], sheet_name)
+        .stat-card.to-empty {
+            background: linear-gradient(135deg, #e5534b 0%, #c73e36 100%);
+        }
         
-        original_df = sheet_changes.get('original_df', pd.DataFrame())
-        modified_df = sheet_changes.get('modified_df', pd.DataFrame())
+        .stat-card.value-change {
+            background: linear-gradient(135deg, #d29922 0%, #b87c1b 100%);
+        }
         
-        # Get max dimensions
-        max_rows = max(len(original_df) if not original_df.empty else 10,
-                      len(modified_df) if not modified_df.empty else 10,
-                      10)  # Show at least 10 rows
-        max_cols = max(len(original_df.columns) if not original_df.empty else 5,
-                      len(modified_df.columns) if not modified_df.empty else 5,
-                      5)  # Show at least 5 columns
+        .stat-number {
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
         
-        # Build change map
-        change_map = {}
-        for mod in sheet_changes.get('modifications', []):
-            change_map[(mod['row']-1, mod['col']-1)] = mod
+        .stat-label {
+            font-size: 14px;
+            opacity: 0.9;
+        }
         
-        html = f"""
-        <div class="diff-container">
-            <div class="diff-header">
-                📊 Sheet: {sheet_name}
-                <span class="sync-indicator">⟷ Synchronized Scrolling</span>
-            </div>
-            <div class="diff-grid">
-                <div class="diff-side">
-                    <div class="diff-side-header">📁 Original</div>
-                    <div class="diff-content" id="original-{sheet_name.replace(' ', '_')}">
-        """
+        /* Diff Container with horizontal scrolling */
+        .diff-container {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            background: #1e1e1e;
+            border: 1px solid #464647;
+            border-radius: 6px;
+            margin: 20px 0;
+            overflow: hidden;
+        }
         
-        # Add column headers
-        html += '<div class="diff-line"><span class="line-number">⬜</span><span class="line-content" style="font-weight: bold;">'
-        col_headers = []
-        for col_idx in range(max_cols):
-            if col_idx < len(original_df.columns):
-                col_headers.append(f"  {original_df.columns[col_idx]}  ")
-            else:
-                col_headers.append(f"  {get_column_letter(col_idx + 1)}  ")
-        html += ' | '.join(col_headers)
-        html += '</span></div>'
+        .diff-header {
+            background: #2d2d30;
+            color: #cccccc;
+            padding: 10px 15px;
+            font-weight: bold;
+            border-bottom: 1px solid #464647;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
         
-        # Original side - data rows
-        for row_idx in range(max_rows):
-            row_has_changes = any((row_idx, col) in change_map for col in range(max_cols))
-            
-            html += f'<div class="diff-line'
-            if row_has_changes:
-                html += ' diff-modified'
-            html += f'"><span class="line-number">{row_idx + 1}</span><span class="line-content">'
-            
-            row_data = []
-            for col_idx in range(max_cols):
-                if row_idx < len(original_df) and col_idx < len(original_df.columns):
-                    value = original_df.iloc[row_idx, col_idx]
-                    
-                    if (row_idx, col_idx) in change_map:
-                        change = change_map[(row_idx, col_idx)]
-                        if value is None:
-                            row_data.append('<span class="cell-empty">[empty]</span>')
-                        else:
-                            row_data.append(f'<span class="cell-value-old">{html.escape(str(value))}</span>')
-                    else:
-                        if value is None:
-                            row_data.append('<span class="cell-empty">·</span>')
-                        else:
-                            row_data.append(html.escape(str(value)))
-                else:
-                    row_data.append('<span class="cell-empty">·</span>')
-            
-            html += ' | '.join(row_data)
-            html += '</span></div>'
+        .sync-indicator {
+            background: #007ACC;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
         
-        html += """
-                    </div>
-                </div>
-                <div class="diff-side">
-                    <div class="diff-side-header">📝 Modified</div>
-                    <div class="diff-content" id="modified-""" + sheet_name.replace(' ', '_') + """">
-        """
+        .diff-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            background: #464647;
+            gap: 1px;
+        }
         
-        # Add column headers for modified side
-        html += '<div class="diff-line"><span class="line-number">⬜</span><span class="line-content" style="font-weight: bold;">'
-        col_headers = []
-        for col_idx in range(max_cols):
-            if col_idx < len(modified_df.columns):
-                col_headers.append(f"  {modified_df.columns[col_idx]}  ")
-            else:
-                col_headers.append(f"  {get_column_letter(col_idx + 1)}  ")
-        html += ' | '.join(col_headers)
-        html += '</span></div>'
+        .diff-side {
+            background: #1e1e1e;
+            overflow: hidden;
+        }
         
-        # Modified side - data rows
-        for row_idx in range(max_rows):
-            row_has_changes = any((row_idx, col) in change_map for col in range(max_cols))
-            
-            html += f'<div class="diff-line'
-            if row_has_changes:
-                html += ' diff-modified'
-            html += f'"><span class="line-number">{row_idx + 1}</span><span class="line-content">'
-            
-            row_data = []
-            for col_idx in range(max_cols):
-                if row_idx < len(modified_df) and col_idx < len(modified_df.columns):
-                    value = modified_df.iloc[row_idx, col_idx]
-                    
-                    if (row_idx, col_idx) in change_map:
-                        change = change_map[(row_idx, col_idx)]
-                        if value is None:
-                            row_data.append('<span class="cell-empty">[empty]</span>')
-                        else:
-                            row_data.append(f'<span class="cell-value-new">{html.escape(str(value))}</span>')
-                    else:
-                        if value is None:
-                            row_data.append('<span class="cell-empty">·</span>')
-                        else:
-                            row_data.append(html.escape(str(value)))
-                else:
-                    row_data.append('<span class="cell-empty">·</span>')
-            
-            html += ' | '.join(row_data)
-            html += '</span></div>'
+        .diff-side-header {
+            background: #2d2d30;
+            color: #969696;
+            padding: 8px 15px;
+            font-size: 12px;
+            border-bottom: 1px solid #464647;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
         
-        html += """
-                    </div>
-                </div>
-            </div>
+        .diff-content {
+            overflow: auto;
+            max-height: 400px;
+            position: relative;
+        }
+        
+        .diff-table {
+            display: table;
+            width: max-content;
+            min-width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .diff-line {
+            display: table-row;
+            min-height: 24px;
+            white-space: nowrap;
+        }
+        
+        .diff-line:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .line-number {
+            display: table-cell;
+            background: #2d2d30;
+            color: #858585;
+            padding: 2px 8px;
+            min-width: 40px;
+            text-align: right;
+            border-right: 1px solid #464647;
+            user-select: none;
+            position: sticky;
+            left: 0;
+            z-index: 5;
+        }
+        
+        .line-content {
+            display: table-cell;
+            padding: 2px 0;
+            white-space: nowrap;
+        }
+        
+        .cell-data {
+            display: inline-block;
+            padding: 2px 12px;
+            min-width: 120px;
+            border-right: 1px solid #3a3a3a;
+            white-space: nowrap;
+        }
+        
+        /* Header row styling */
+        .header-row {
+            background: #2d2d30 !important;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 6;
+        }
+        
+        .header-row .cell-data {
+            background: #2d2d30;
+            color: #007ACC;
+            font-weight: bold;
+            border-right: 1px solid #464647;
+        }
+        
+        /* All changes are modifications */
+        .diff-modified {
+            background: rgba(210, 153, 34, 0.15) !important;
+        }
+        
+        .diff-modified .line-number {
+            background: #3d3319 !important;
+            color: #d29922;
+        }
+        
+        /* Cell value highlighting */
+        .cell-empty {
+            color: #6a6a6a;
+            font-style: italic;
+            opacity: 0.6;
+        }
+        
+        .cell-value-old {
+            background: rgba(229, 83, 75, 0.2);
+            color: #f85149;
+            padding: 1px 4px;
+            border-radius: 2px;
+            text-decoration: line-through;
+        }
+        
+        .cell-value-new {
+            background: rgba(87, 171, 90, 0.2);
+            color: #57ab5a;
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-weight: bold;
+        }
+        
+        .demo-note {
+            background: #2d2d30;
+            border: 1px solid #007ACC;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 20px 0;
+            color: #cccccc;
+        }
+        
+        .demo-note h3 {
+            color: #007ACC;
+            margin-top: 0;
+        }
+        
+        /* Change list */
+        .change-list {
+            background: #2d2d30;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+        
+        .change-item {
+            background: #1e1e1e;
+            border: 1px solid #464647;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 8px 0;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        
+        .change-location {
+            color: #007ACC;
+            font-weight: bold;
+        }
+        
+        .change-arrow {
+            color: #d29922;
+            margin: 0 8px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Excel Diff Visualizer - Everything as Modifications</h1>
+        <div class="subtitle">All changes shown as modifications from original state to new state</div>
+        
+        <div class="demo-note">
+            <h3>📌 New Approach: Everything is a Modification</h3>
+            <p>This visualizer treats all changes as modifications:</p>
+            <ul>
+                <li>📝 <strong>[empty] → Value</strong> = Cell modified from empty to having content</li>
+                <li>📝 <strong>Value → [empty]</strong> = Cell modified from having content to empty</li>
+                <li>📝 <strong>Value → Value</strong> = Cell content modified</li>
+            </ul>
+            <p>This is more accurate since Excel cells always exist - they're just empty or filled.</p>
         </div>
         
-        <script>
-        // Synchronized scrolling
-        (function() {
-            const original = document.getElementById('original-""" + sheet_name.replace(' ', '_') + """');
-            const modified = document.getElementById('modified-""" + sheet_name.replace(' ', '_') + """');
-            
-            if (original && modified) {
-                let syncing = false;
-                
-                original.addEventListener('scroll', function() {
-                    if (!syncing) {
-                        syncing = true;
-                        modified.scrollTop = original.scrollTop;
-                        modified.scrollLeft = original.scrollLeft;
-                        syncing = false;
-                    }
-                });
-                
-                modified.addEventListener('scroll', function() {
-                    if (!syncing) {
-                        syncing = true;
-                        original.scrollTop = modified.scrollTop;
-                        original.scrollLeft = modified.scrollLeft;
-                        syncing = false;
-                    }
-                });
-            }
-        })();
-        </script>
-        """
-        
-        return html
-    
-    def _create_added_sheet_view(self, df, sheet_name):
-        """Create view for entirely added sheet"""
-        html = f"""
-        <div class="diff-container">
-            <div class="diff-header" style="background: #57ab5a; color: white;">
-                📄 New Sheet: {sheet_name}
-            </div>
-            <div style="padding: 20px; background: rgba(87, 171, 90, 0.1); color: #d4d4d4;">
-                <p style="margin-bottom: 15px;">This entire sheet was added. All cells are modifications from [empty] to their current values.</p>
-        """
-        
-        if not df.empty:
-            for row_idx in range(min(len(df), 20)):  # Show first 20 rows
-                html += f'<div class="diff-line diff-modified">'
-                html += f'<span class="line-number">{row_idx + 1}</span>'
-                html += '<span class="line-content">'
-                row_data = []
-                for col_idx in range(len(df.columns)):
-                    value = df.iloc[row_idx, col_idx]
-                    if value is not None:
-                        row_data.append(f'<span class="value-new">{html.escape(str(value))}</span>')
-                    else:
-                        row_data.append('<span class="cell-empty">[empty]</span>')
-                html += ' | '.join(row_data)
-                html += '</span></div>'
-            
-            if len(df) > 20:
-                html += f'<div style="padding: 10px; color: #858585;">... and {len(df) - 20} more rows</div>'
-        
-        html += "</div></div>"
-        return html
-    
-    def _create_removed_sheet_view(self, df, sheet_name):
-        """Create view for entirely removed sheet"""
-        html = f"""
-        <div class="diff-container">
-            <div class="diff-header" style="background: #e5534b; color: white;">
-                📄 Removed Sheet: {sheet_name}
-            </div>
-            <div style="padding: 20px; background: rgba(229, 83, 75, 0.1); color: #d4d4d4;">
-                <p style="margin-bottom: 15px;">This entire sheet was removed. All cells are modifications from their values to [empty].</p>
-        """
-        
-        if not df.empty:
-            for row_idx in range(min(len(df), 20)):  # Show first 20 rows
-                html += f'<div class="diff-line diff-modified">'
-                html += f'<span class="line-number">{row_idx + 1}</span>'
-                html += '<span class="line-content">'
-                row_data = []
-                for col_idx in range(len(df.columns)):
-                    value = df.iloc[row_idx, col_idx]
-                    if value is not None:
-                        row_data.append(f'<span class="value-old">{html.escape(str(value))}</span>')
-                    else:
-                        row_data.append('<span class="cell-empty">[empty]</span>')
-                html += ' | '.join(row_data)
-                html += '</span></div>'
-            
-            if len(df) > 20:
-                html += f'<div style="padding: 10px; color: #858585;">... and {len(df) - 20} more rows</div>'
-        
-        html += "</div></div>"
-        return html
-
-# Main Streamlit App
-def main():
-    st.title("🔍 Excel Diff Visualizer")
-    st.markdown("All changes shown as modifications - from original value to new value")
-    
-    # Sidebar for file upload
-    with st.sidebar:
-        st.header("📁 Upload Files")
-        
-        original_file = st.file_uploader(
-            "Upload Original Template", 
-            type=['xlsx', 'xls'],
-            help="Upload the original Excel template"
-        )
-        
-        modified_file = st.file_uploader(
-            "Upload Modified Version", 
-            type=['xlsx', 'xls'],
-            help="Upload the modified Excel file"
-        )
-        
-        st.divider()
-        
-        # View options
-        st.header("⚙️ View Options")
-        view_mode = st.radio(
-            "Display Mode",
-            ["Side-by-Side Diff", "Change List", "Summary Only"],
-            index=0
-        )
-        
-        show_empty_changes = st.checkbox("Show [empty] → value changes", value=True)
-        
-        if st.button("🔍 Compare Files", type="primary", disabled=not (original_file and modified_file)):
-            if original_file and modified_file:
-                with st.spinner("Analyzing modifications..."):
-                    st.session_state['original_file'] = original_file
-                    st.session_state['modified_file'] = modified_file
-                    
-                    visualizer = ExcelDiffVisualizer(original_file, modified_file)
-                    changes = visualizer.compare_sheets()
-                    
-                    st.session_state['changes'] = changes
-                    st.session_state['visualizer'] = visualizer
-                    st.session_state['comparison_done'] = True
-    
-    # Main content area
-    if 'comparison_done' in st.session_state and st.session_state['comparison_done']:
-        visualizer = st.session_state['visualizer']
-        changes = st.session_state['changes']
-        
-        # Summary Statistics
-        st.markdown("### 📊 Modification Summary")
-        
-        stats_html = f"""
+        <!-- Statistics Cards -->
         <div class="stats-container">
             <div class="stat-card">
-                <div class="stat-number">{visualizer.summary['total_modifications']}</div>
+                <div class="stat-number">47</div>
                 <div class="stat-label">Total Modifications</div>
             </div>
             <div class="stat-card from-empty">
-                <div class="stat-number">{visualizer.summary['blank_to_value']}</div>
+                <div class="stat-number">15</div>
                 <div class="stat-label">[empty] → Value</div>
             </div>
             <div class="stat-card to-empty">
-                <div class="stat-number">{visualizer.summary['value_to_blank']}</div>
+                <div class="stat-number">8</div>
                 <div class="stat-label">Value → [empty]</div>
             </div>
-            <div class="stat-card modified">
-                <div class="stat-number">{visualizer.summary['value_to_value']}</div>
+            <div class="stat-card value-change">
+                <div class="stat-number">24</div>
                 <div class="stat-label">Value → Value</div>
             </div>
         </div>
-        """
-        st.markdown(stats_html, unsafe_allow_html=True)
         
-        # Sheet navigation
-        if visualizer.summary['sheets_modified']:
-            st.markdown("### 📑 Sheet Modifications")
+        <!-- VS Code Style Diff View with Horizontal Scrolling -->
+        <div class="diff-container">
+            <div class="diff-header">
+                📊 Sheet: Financial_Summary
+                <span class="sync-indicator">⟷ Synchronized Scrolling (Horizontal & Vertical)</span>
+            </div>
+            <div class="diff-grid">
+                <!-- Original Side -->
+                <div class="diff-side">
+                    <div class="diff-side-header">📁 Original Template</div>
+                    <div class="diff-content">
+                        <div class="diff-table">
+                            <!-- Header Row -->
+                            <div class="diff-line header-row">
+                                <span class="line-number">⬜</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product</span>
+                                    <span class="cell-data">Q1 2024</span>
+                                    <span class="cell-data">Q2 2024</span>
+                                    <span class="cell-data">Q3 2024</span>
+                                    <span class="cell-data">Q4 2024</span>
+                                    <span class="cell-data">Total</span>
+                                    <span class="cell-data">YoY Growth</span>
+                                    <span class="cell-data">Comments</span>
+                                </span>
+                            </div>
+                            
+                            <div class="diff-line">
+                                <span class="line-number">1</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product</span>
+                                    <span class="cell-data">Q1 2024</span>
+                                    <span class="cell-data">Q2 2024</span>
+                                    <span class="cell-data">Q3 2024</span>
+                                    <span class="cell-data">Q4 2024</span>
+                                    <span class="cell-data">Total</span>
+                                    <span class="cell-data">YoY Growth</span>
+                                    <span class="cell-data">Comments</span>
+                                </span>
+                            </div>
+                            
+                            <div class="diff-line diff-modified">
+                                <span class="line-number">2</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product A</span>
+                                    <span class="cell-data"><span class="cell-value-old">$10,000</span></span>
+                                    <span class="cell-data">$12,000</span>
+                                    <span class="cell-data">$14,000</span>
+                                    <span class="cell-data"><span class="cell-value-old">$15,000</span></span>
+                                    <span class="cell-data"><span class="cell-value-old">$51,000</span></span>
+                                    <span class="cell-data">15%</span>
+                                    <span class="cell-data">Good performance</span>
+                                </span>
+                            </div>
+                            
+                            <div class="diff-line">
+                                <span class="line-number">3</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product B</span>
+                                    <span class="cell-data">$8,000</span>
+                                    <span class="cell-data">$9,500</span>
+                                    <span class="cell-data">$11,000</span>
+                                    <span class="cell-data">$12,500</span>
+                                    <span class="cell-data">$41,000</span>
+                                    <span class="cell-data">12%</span>
+                                    <span class="cell-data">Stable growth</span>
+                                </span>
+                            </div>
+                            
+                            <div class="diff-line diff-modified">
+                                <span class="line-number">4</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product C</span>
+                                    <span class="cell-data"><span class="cell-value-old">$5,000</span></span>
+                                    <span class="cell-data"><span class="cell-value-old">$5,500</span></span>
+                                    <span class="cell-data"><span class="cell-value-old">$6,000</span></span>
+                                    <span class="cell-data"><span class="cell-value-old">$6,500</span></span>
+                                    <span class="cell-data"><span class="cell-value-old">$23,000</span></span>
+                                    <span class="cell-data"><span class="cell-value-old">8%</span></span>
+                                    <span class="cell-data"><span class="cell-value-old">Discontinued</span></span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Modified Side -->
+                <div class="diff-side">
+                    <div class="diff-side-header">📝 Client's Modified Version</div>
+                    <div class="diff-content">
+                        <div class="diff-table">
+                            <!-- Header Row -->
+                            <div class="diff-line header-row">
+                                <span class="line-number">⬜</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product</span>
+                                    <span class="cell-data">Q1 2024</span>
+                                    <span class="cell-data">Q2 2024</span>
+                                    <span class="cell-data">Q3 2024</span>
+                                    <span class="cell-data">Q4 2024</span>
+                                    <span class="cell-data">Total</span>
+                                    <span class="cell-data">YoY Growth</span>
+                                    <span class="cell-data">Comments</span>
+                                </span>
+                            </div>
+                            
+                            <div class="diff-line">
+                                <span class="line-number">1</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product</span>
+                                    <span class="cell-data">Q1 2024</span>
+                                    <span class="cell-data">Q2 2024</span>
+                                    <span class="cell-data">Q3 2024</span>
+                                    <span class="cell-data">Q4 2024</span>
+                                    <span class="cell-data">Total</span>
+                                    <span class="cell-data">YoY Growth</span>
+                                    <span class="cell-data">Comments</span>
+                                </span>
+                            </div>
+                            
+                            <div class="diff-line diff-modified">
+                                <span class="line-number">2</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product A</span>
+                                    <span class="cell-data"><span class="cell-value-new">$11,500</span></span>
+                                    <span class="cell-data">$12,000</span>
+                                    <span class="cell-data">$14,000</span>
+                                    <span class="cell-data"><span class="cell-value-new">$16,500</span></span>
+                                    <span class="cell-data"><span class="cell-value-new">$54,000</span></span>
+                                    <span class="cell-data">15%</span>
+                                    <span class="cell-data">Good performance</span>
+                                </span>
+                            </div>
+                            
+                            <div class="diff-line">
+                                <span class="line-number">3</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product B</span>
+                                    <span class="cell-data">$8,000</span>
+                                    <span class="cell-data">$9,500</span>
+                                    <span class="cell-data">$11,000</span>
+                                    <span class="cell-data">$12,500</span>
+                                    <span class="cell-data">$41,000</span>
+                                    <span class="cell-data">12%</span>
+                                    <span class="cell-data">Stable growth</span>
+                                </span>
+                            </div>
+                            
+                            <div class="diff-line diff-modified">
+                                <span class="line-number">4</span>
+                                <span class="line-content">
+                                    <span class="cell-data">Product C</span>
+                                    <span class="cell-data"><span class="cell-empty">[empty]</span></span>
+                                    <span class="cell-data"><span class="cell-empty">[empty]</span></span>
+                                    <span class="cell-data"><span class="cell-empty">[empty]</span></span>
+                                    <span class="cell-data"><span class="cell-empty">[empty]</span></span>
+                                    <span class="cell-data"><span class="cell-empty">[empty]</span></span>
+                                    <span class="cell-data"><span class="cell-empty">[empty]</span></span>
+                                    <span class="cell-data"><span class="cell-empty">[empty]</span></span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Change List View with Column Names -->
+        <div class="change-list">
+            <h3 style="color: #007ACC; margin-top: 0;">📝 Modification List (Using Column Headers)</h3>
             
-            if view_mode == "Side-by-Side Diff":
-                # VS Code style diff view
-                sheet_tabs = st.tabs(visualizer.summary['sheets_modified'])
-                
-                for idx, sheet_name in enumerate(visualizer.summary['sheets_modified']):
-                    with sheet_tabs[idx]:
-                        # Clean sheet name
-                        clean_name = sheet_name.replace(" (New Sheet)", "").replace(" (Sheet Removed)", "")
-                        
-                        # Display VS Code style diff
-                        diff_html = visualizer.create_vs_code_diff_html(clean_name)
-                        st.markdown(diff_html, unsafe_allow_html=True)
-                        
-                        # Quick stats for this sheet
-                        sheet_changes = changes.get(clean_name, {})
-                        if sheet_changes and sheet_changes.get('modifications'):
-                            st.markdown("---")
-                            
-                            # Count change types
-                            blank_to_value = sum(1 for m in sheet_changes['modifications'] if m['change_type'] == 'blank_to_value')
-                            value_to_blank = sum(1 for m in sheet_changes['modifications'] if m['change_type'] == 'value_to_blank')
-                            value_to_value = sum(1 for m in sheet_changes['modifications'] if m['change_type'] == 'value_to_value')
-                            
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("[empty] → Value", blank_to_value)
-                            with col2:
-                                st.metric("Value → [empty]", value_to_blank)
-                            with col3:
-                                st.metric("Value → Value", value_to_value)
+            <div class="change-item">
+                <span class="change-location">Q1 2024, Row 2</span>
+                <span class="change-arrow">→</span>
+                Modified from <span class="cell-value-old">$10,000</span> to <span class="cell-value-new">$11,500</span>
+            </div>
             
-            elif view_mode == "Change List":
-                # List all modifications
-                for sheet_name in visualizer.summary['sheets_modified']:
-                    clean_name = sheet_name.replace(" (New Sheet)", "").replace(" (Sheet Removed)", "")
-                    sheet_changes = changes.get(clean_name, {})
-                    
-                    with st.expander(f"📋 {sheet_name}", expanded=True):
-                        if sheet_changes.get('modifications'):
-                            # Group modifications by type
-                            mods = sheet_changes['modifications']
-                            
-                            # Filter based on user preference
-                            if not show_empty_changes:
-                                mods = [m for m in mods if m['change_type'] == 'value_to_value']
-                            
-                            if mods:
-                                st.markdown(f"**{len(mods)} modifications found:**")
-                                
-                                # Show first 20 modifications
-                                for mod in mods[:20]:
-                                    old_val = visualizer._format_value(mod['old_value'])
-                                    new_val = visualizer._format_value(mod['new_value'])
-                                    
-                                    change_html = f"""
-                                    <div class="change-item">
-                                        <span class="change-location">Cell {mod['cell_ref']}</span>
-                                        <span class="change-arrow">→</span>
-                                        Modified from <span class="value-old">{html.escape(old_val)}</span> 
-                                        to <span class="value-new">{html.escape(new_val)}</span>
-                                    </div>
-                                    """
-                                    st.markdown(change_html, unsafe_allow_html=True)
-                                
-                                if len(mods) > 20:
-                                    st.info(f"... and {len(mods) - 20} more modifications")
-                            else:
-                                st.info("No modifications to display (check filter settings)")
+            <div class="change-item">
+                <span class="change-location">Q4 2024, Row 2</span>
+                <span class="change-arrow">→</span>
+                Modified from <span class="cell-value-old">$15,000</span> to <span class="cell-value-new">$16,500</span>
+            </div>
             
-            else:  # Summary Only
-                st.markdown("### Summary View")
-                summary_data = []
-                
-                for sheet_name in visualizer.summary['sheets_modified']:
-                    clean_name = sheet_name.replace(" (New Sheet)", "").replace(" (Sheet Removed)", "")
-                    sheet_changes = changes.get(clean_name, {})
-                    
-                    if sheet_changes.get('modifications'):
-                        mods = sheet_changes['modifications']
-                        
-                        blank_to_value = sum(1 for m in mods if m['change_type'] == 'blank_to_value')
-                        value_to_blank = sum(1 for m in mods if m['change_type'] == 'value_to_blank')
-                        value_to_value = sum(1 for m in mods if m['change_type'] == 'value_to_value')
-                        
-                        summary_data.append({
-                            'Sheet': sheet_name,
-                            '[empty] → Value': blank_to_value,
-                            'Value → [empty]': value_to_blank,
-                            'Value → Value': value_to_value,
-                            'Total': len(mods)
-                        })
-                
-                if summary_data:
-                    summary_df = pd.DataFrame(summary_data)
-                    st.dataframe(
-                        summary_df,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Sheet": st.column_config.TextColumn("Sheet Name", width="medium"),
-                            "[empty] → Value": st.column_config.NumberColumn("Empty→Value", format="%d"),
-                            "Value → [empty]": st.column_config.NumberColumn("Value→Empty", format="%d"),
-                            "Value → Value": st.column_config.NumberColumn("Value→Value", format="%d"),
-                            "Total": st.column_config.NumberColumn("Total Mods", format="%d"),
-                        }
-                    )
-        else:
-            st.info("✅ No modifications detected between the files")
+            <div class="change-item">
+                <span class="change-location">Total, Row 2</span>
+                <span class="change-arrow">→</span>
+                Modified from <span class="cell-value-old">$51,000</span> to <span class="cell-value-new">$54,000</span>
+            </div>
+            
+            <div class="change-item">
+                <span class="change-location">Q1 2024, Row 4</span>
+                <span class="change-arrow">→</span>
+                Modified from <span class="cell-value-old">$5,000</span> to <span class="cell-empty">[empty]</span>
+            </div>
+            
+            <div class="change-item">
+                <span class="change-location">Q2 2024, Row 4</span>
+                <span class="change-arrow">→</span>
+                Modified from <span class="cell-value-old">$5,500</span> to <span class="cell-empty">[empty]</span>
+            </div>
+            
+            <div class="change-item">
+                <span class="change-location">Comments, Row 4</span>
+                <span class="change-arrow">→</span>
+                Modified from <span class="cell-value-old">Discontinued</span> to <span class="cell-empty">[empty]</span>
+            </div>
+        </div>
         
-        # Export section
-        st.markdown("---")
-        st.markdown("### 💾 Export Options")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("📄 Export Change Report", type="secondary"):
-                # Generate detailed text report
-                report = f"""EXCEL MODIFICATION REPORT
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-SUMMARY
-=======
-Total Modifications: {visualizer.summary['total_modifications']}
-- [empty] → Value: {visualizer.summary['blank_to_value']}
-- Value → [empty]: {visualizer.summary['value_to_blank']}
-- Value → Value: {visualizer.summary['value_to_value']}
-
-DETAILED CHANGES BY SHEET
-========================
-"""
-                for sheet_name in visualizer.summary['sheets_modified']:
-                    clean_name = sheet_name.replace(" (New Sheet)", "").replace(" (Sheet Removed)", "")
-                    sheet_changes = changes.get(clean_name, {})
-                    
-                    if sheet_changes.get('modifications'):
-                        report += f"\n\nSheet: {sheet_name}\n"
-                        report += "-" * (len(sheet_name) + 7) + "\n"
-                        
-                        for mod in sheet_changes['modifications']:
-                            old_val = visualizer._format_value(mod['old_value'])
-                            new_val = visualizer._format_value(mod['new_value'])
-                            report += f"  {mod['cell_ref']}: {old_val} → {new_val}\n"
-                
-                st.download_button(
-                    label="⬇️ Download Report",
-                    data=report,
-                    file_name=f"excel_modifications_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                    mime="text/plain"
-                )
-        
-        with col2:
-            if st.button("📊 Export Diff Excel", type="secondary"):
-                # Create diff Excel with highlighting
-                diff_wb = openpyxl.Workbook()
-                diff_wb.remove(diff_wb.active)
-                
-                # Color for modifications
-                yellow_fill = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
-                
-                for sheet_name, sheet_changes in changes.items():
-                    if sheet_changes['sheet_removed']:
-                        continue
-                    
-                    diff_sheet = diff_wb.create_sheet(sheet_name)
-                    
-                    # Use modified version as base
-                    if sheet_name in visualizer.modified_wb.sheetnames:
-                        source_sheet = visualizer.modified_wb[sheet_name]
-                        
-                        # Copy all cells and highlight modifications
-                        for row in source_sheet.iter_rows():
-                            for cell in row:
-                                new_cell = diff_sheet.cell(row=cell.row, column=cell.column, value=cell.value)
-                                
-                                # Check if this cell was modified
-                                for mod in sheet_changes.get('modifications', []):
-                                    if mod['cell'] == (cell.row, cell.column):
-                                        new_cell.fill = yellow_fill
-                                        old_val = visualizer._format_value(mod['old_value'])
-                                        new_val = visualizer._format_value(mod['new_value'])
-                                        new_cell.comment = openpyxl.comments.Comment(
-                                            f"Modified from: {old_val} to: {new_val}", 
-                                            "Diff Tool"
-                                        )
-                                        break
-                
-                # Add summary sheet
-                summary_sheet = diff_wb.create_sheet("MODIFICATION_SUMMARY", 0)
-                summary_data = [
-                    ["Excel Modification Report", ""],
-                    ["Generated:", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-                    ["", ""],
-                    ["Total Modifications:", visualizer.summary['total_modifications']],
-                    ["[empty] → Value:", visualizer.summary['blank_to_value']],
-                    ["Value → [empty]:", visualizer.summary['value_to_blank']],
-                    ["Value → Value:", visualizer.summary['value_to_value']],
-                    ["", ""],
-                    ["Sheets Modified:", ", ".join(visualizer.summary['sheets_modified']) if visualizer.summary['sheets_modified'] else "None"],
-                ]
-                
-                for row_idx, row_data in enumerate(summary_data, 1):
-                    for col_idx, value in enumerate(row_data, 1):
-                        cell = summary_sheet.cell(row=row_idx, column=col_idx, value=value)
-                        if row_idx == 1:
-                            cell.font = Font(bold=True, size=14)
-                        elif col_idx == 1 and row_idx > 3:
-                            cell.font = Font(bold=True)
-                
-                excel_buffer = io.BytesIO()
-                diff_wb.save(excel_buffer)
-                excel_buffer.seek(0)
-                
-                st.download_button(
-                    label="⬇️ Download Diff Excel",
-                    data=excel_buffer,
-                    file_name=f"excel_diff_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-        
-        with col3:
-            if st.button("📋 Export JSON", type="secondary"):
-                # Prepare JSON export
-                change_report = {
-                    'summary': visualizer.summary,
-                    'modifications_by_sheet': {},
-                    'timestamp': datetime.now().isoformat()
-                }
-                
-                for sheet_name, sheet_changes in changes.items():
-                    if sheet_changes.get('modifications'):
-                        change_report['modifications_by_sheet'][sheet_name] = [
-                            {
-                                'cell': mod['cell_ref'],
-                                'from': visualizer._format_value(mod['old_value']),
-                                'to': visualizer._format_value(mod['new_value']),
-                                'type': mod['change_type']
-                            }
-                            for mod in sheet_changes['modifications']
-                        ]
-                
-                json_str = json.dumps(change_report, indent=2, default=str)
-                
-                st.download_button(
-                    label="⬇️ Download JSON",
-                    data=json_str,
-                    file_name=f"modifications_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-    
-    else:
-        # Welcome screen
-        st.markdown("""
-        ### Welcome to Excel Diff Visualizer! 
-        
-        This tool treats all Excel changes as **modifications**:
-        
-        - 📝 **Everything is a modification**: No "added" or "removed" - just "modified from X to Y"
-        - 🔄 **[empty] → Value**: When a blank cell gets a value
-        - 🔄 **Value → [empty]**: When a cell value is cleared
-        - 🔄 **Value → Value**: When a cell value changes
-        
-        **Key Features:**
-        - 🎯 **VS Code-style side-by-side view** with synchronized scrolling
-        - 📊 **Clear modification tracking** showing exactly what changed
-        - 💾 **Multiple export formats** for documentation
-        
-        **To get started:**
-        1. Upload your original Excel template in the sidebar
-        2. Upload the modified version from your client
-        3. Click "Compare Files" to see all modifications
-        
-        Every change will be shown as a modification, making it clear what the original value was 
-        (even if it was empty) and what it became.
-        """)
-
-if __name__ == "__main__":
-    main()
+        <div class="demo-note">
+            <h3>✨ Enhanced Features</h3>
+            <ul>
+                <li><strong>Horizontal Scrolling:</strong> Wide spreadsheets display cleanly with no line wrapping</li>
+                <li><strong>Column Header Names:</strong> Changes show "Q1 2024, Row 2" instead of "Cell B2"</li>
+                <li><strong>Sticky Headers:</strong> Column headers stay visible while scrolling</li>
+                <li><strong>Synchronized Scrolling:</strong> Both horizontal and vertical scrolling synced between panels</li>
+                <li><strong>Clean Table Layout:</strong> Each cell has its own column, making it easy to scan changes</li>
+            </ul>
+            <p style="margin-top: 15px;">
+                <strong>💡 Try it:</strong> In the actual application, you can scroll horizontally through 
+                hundreds of columns while keeping everything aligned and readable. The column headers from 
+                your Excel file are automatically detected and used throughout the interface.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
