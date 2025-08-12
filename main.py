@@ -474,16 +474,21 @@ class ExcelDiffVisualizer:
         for mod in sheet_changes.get('modifications', []):
             change_map[(mod['row']-1, mod['col']-1)] = mod
         
+        # Generate unique ID for this sheet's containers
+        sheet_id = sheet_name.replace(' ', '_').replace('(', '').replace(')', '')
+        
         html = f"""
         <div class="diff-container">
             <div class="diff-header">
                 📊 Sheet: {sheet_name}
-                <span class="sync-indicator">⟷ Synchronized Scrolling</span>
+                <span style="background: #007ACC; color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; margin-left: 10px;">
+                    📜 Scroll to compare
+                </span>
             </div>
             <div class="diff-grid">
                 <div class="diff-side">
                     <div class="diff-side-header">📁 Original</div>
-                    <div class="diff-content" id="original-{sheet_name.replace(' ', '_')}">
+                    <div class="diff-content">
                         <div class="diff-table">
         """
         
@@ -540,7 +545,7 @@ class ExcelDiffVisualizer:
                 </div>
                 <div class="diff-side">
                     <div class="diff-side-header">📝 Modified</div>
-                    <div class="diff-content" id="modified-""" + sheet_name.replace(' ', '_') + """">
+                    <div class="diff-content">
                         <div class="diff-table">
         """
         
@@ -597,36 +602,6 @@ class ExcelDiffVisualizer:
                 </div>
             </div>
         </div>
-        
-        <script>
-        // Synchronized scrolling
-        (function() {
-            const original = document.getElementById('original-""" + sheet_name.replace(' ', '_') + """');
-            const modified = document.getElementById('modified-""" + sheet_name.replace(' ', '_') + """');
-            
-            if (original && modified) {
-                let syncing = false;
-                
-                original.addEventListener('scroll', function() {
-                    if (!syncing) {
-                        syncing = true;
-                        modified.scrollTop = original.scrollTop;
-                        modified.scrollLeft = original.scrollLeft;
-                        syncing = false;
-                    }
-                });
-                
-                modified.addEventListener('scroll', function() {
-                    if (!syncing) {
-                        syncing = true;
-                        original.scrollTop = modified.scrollTop;
-                        original.scrollLeft = modified.scrollLeft;
-                        syncing = false;
-                    }
-                });
-            }
-        })();
-        </script>
         """
         
         return html
