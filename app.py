@@ -93,6 +93,8 @@ def main():
         show_excel_comparison()
     elif st.session_state['selected_tool'] == 'pdf':
         show_pdf_comparison()
+    elif st.session_state['selected_tool'] == 'pdf_optimized':
+        show_pdf_comparison_optimized()
 
 
 def show_tool_selection():
@@ -107,7 +109,7 @@ def show_tool_selection():
 
     st.markdown("### Choose Your Comparison Tool")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         st.markdown("""
@@ -155,6 +157,30 @@ def show_tool_selection():
 
         if st.button("🚀 Launch PDF Comparison", key="launch_pdf", type="primary", use_container_width=True):
             st.session_state['selected_tool'] = 'pdf'
+            st.rerun()
+
+    with col3:
+        st.markdown("""
+        <div class="tool-card">
+            <div class="tool-icon">⚡</div>
+            <div class="tool-title">PDF Comparison (Fast)</div>
+            <div class="tool-description">
+                Optimized PDF comparison with dropdown navigation.
+                Much faster for large documents!
+
+                <ul class="feature-list">
+                    <li>⚡ Extract structure in seconds</li>
+                    <li>📑 Dropdown section selector</li>
+                    <li>🎯 Load content on-demand</li>
+                    <li>↔️ Side-by-side view</li>
+                    <li>💡 Better for large PDFs</li>
+                </ul>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("🚀 Launch Fast PDF", key="launch_pdf_opt", type="primary", use_container_width=True):
+            st.session_state['selected_tool'] = 'pdf_optimized'
             st.rerun()
 
     # Information section
@@ -222,6 +248,26 @@ def show_pdf_comparison():
     # Import and run PDF comparison
     from pdf_compare_ui import create_pdf_comparison_ui
     create_pdf_comparison_ui()
+
+
+def show_pdf_comparison_optimized():
+    """Show optimized PDF comparison tool"""
+
+    # Add back button in sidebar
+    with st.sidebar:
+        if st.button("⬅️ Back to Tool Selection", key="back_from_pdf_opt"):
+            st.session_state['selected_tool'] = None
+            # Clear PDF-related session state
+            for key in list(st.session_state.keys()):
+                if key.startswith('pdf_opt_'):
+                    del st.session_state[key]
+            st.rerun()
+
+        st.divider()
+
+    # Import and run optimized PDF comparison
+    from pdf_compare_ui_optimized import create_optimized_pdf_ui
+    create_optimized_pdf_ui()
 
 
 if __name__ == "__main__":
