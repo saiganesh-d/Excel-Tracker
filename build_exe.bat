@@ -1,10 +1,55 @@
 @echo off
 REM Build script for creating Windows executable
 REM This creates a standalone EXE that users can run without Python
+REM Works with both global Python and virtual environments
 
 echo ========================================
 echo Document Comparison Suite - EXE Builder
 echo ========================================
+echo.
+
+REM Check if we're in a virtual environment
+if defined VIRTUAL_ENV (
+    echo Using virtual environment: %VIRTUAL_ENV%
+    echo.
+) else (
+    echo WARNING: Not in a virtual environment
+    echo Looking for venv in common locations...
+    echo.
+
+    REM Check for common venv locations
+    if exist "venv\Scripts\activate.bat" (
+        echo Found venv folder. Activating...
+        call venv\Scripts\activate.bat
+    ) else if exist ".venv\Scripts\activate.bat" (
+        echo Found .venv folder. Activating...
+        call .venv\Scripts\activate.bat
+    ) else if exist "env\Scripts\activate.bat" (
+        echo Found env folder. Activating...
+        call env\Scripts\activate.bat
+    ) else (
+        echo No virtual environment found.
+        echo Using system Python (if available)
+        echo.
+    )
+)
+
+REM Verify Python is available
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: Python not found!
+    echo.
+    echo Please either:
+    echo 1. Activate your virtual environment first, then run this script
+    echo 2. Install Python globally
+    echo.
+    echo Example: venv\Scripts\activate.bat
+    pause
+    exit /b 1
+)
+
+echo Python found:
+python --version
 echo.
 
 REM Check if PyInstaller is installed
