@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 import numpy as np
 from collections import defaultdict
+import warnings
+
+# Suppress pdfplumber pattern warnings
+warnings.filterwarnings('ignore', message='.*cannot set gray color.*')
+warnings.filterwarnings('ignore', message='.*Pattern.*')
 
 
 @dataclass
@@ -94,13 +99,28 @@ class PDFStructureExtractor:
         current_section = None
         content_buffer = []
 
-        with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, start=1):
-                text = page.extract_text()
-                if not text:
-                    continue
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                for page_num, page in enumerate(pdf.pages, start=1):
+                    try:
+                        # Use layout=True and disable pattern extraction to avoid pattern errors
+                        text = page.extract_text(layout=True, x_tolerance=3, y_tolerance=3)
+                        if not text:
+                            continue
+                    except Exception as e:
+                        # If extraction fails (e.g., pattern errors), try simpler method
+                        print(f"Warning: Complex graphics on page {page_num}, using basic extraction")
+                        try:
+                            text = page.extract_text()
+                        except:
+                            # If even basic extraction fails, skip this page
+                            print(f"Warning: Skipping page {page_num} due to extraction error")
+                            continue
 
-                lines = text.split('\n')
+                        if not text:
+                            continue
+
+                    lines = text.split('\n')
 
                 for line in lines:
                     line = line.strip()
@@ -130,10 +150,18 @@ class PDFStructureExtractor:
                         if current_section:
                             content_buffer.append(line)
 
-        # Don't forget the last section
-        if current_section:
-            current_section.content = '\n'.join(content_buffer).strip()
-            sections.append(current_section)
+            # Don't forget the last section
+            if current_section:
+                current_section.content = '\n'.join(content_buffer).strip()
+                sections.append(current_section)
+
+        except Exception as e:
+            print(f"Error processing PDF: {str(e)}")
+            print("Attempting to extract whatever content is available...")
+            # Return any sections we managed to extract
+            if current_section:
+                current_section.content = '\n'.join(content_buffer).strip()
+                sections.append(current_section)
 
         self.sections = sections
         return sections
