@@ -6,6 +6,7 @@ Uses dropdown navigation with on-demand content loading
 import streamlit as st
 import streamlit.components.v1 as components
 from pdf_compare_optimized import OptimizedPDFExtractor, PDFComparator, HeadingInfo, SectionContent
+from smart_diff import SmartDiff, ContentAnalyzer, format_diff_for_display
 import html
 from datetime import datetime
 import difflib
@@ -383,34 +384,88 @@ def display_content_panel(content: SectionContent, is_original: bool, status: st
 
 
 def display_diff_analysis(orig_text: str, mod_text: str):
-    """Display line-by-line diff"""
+    """Display smart line-by-line diff with word-level highlighting"""
 
-    orig_lines = orig_text.splitlines()
-    mod_lines = mod_text.splitlines()
+    # Calculate similarity
+    differ = SmartDiff()
+    similarity = differ.calculate_similarity(orig_text, mod_text)
 
-    # Use difflib to compute differences
-    differ = difflib.Differ()
-    diff = list(differ.compare(orig_lines, mod_lines))
+    # Show similarity score
+    if similarity > 90:
+        color = "#57ab5a"
+        label = "Very Similar"
+    elif similarity > 70:
+        color = "#d29922"
+        label = "Moderately Similar"
+    elif similarity > 40:
+        color = "#e5534b"
+        label = "Significantly Different"
+    else:
+        color = "#e5534b"
+        label = "Very Different"
 
-    # Render diff
-    diff_html = '<div class="content-text">'
+    st.markdown(f"""
+    <div style="background: rgba(0, 122, 204, 0.1); padding: 10px; border-radius: 6px; margin-bottom: 15px;">
+        <strong>Content Similarity:</strong>
+        <span style="color: {color}; font-weight: bold; font-size: 18px;">{similarity:.1f}%</span>
+        <span style="color: {color};">({label})</span>
+    </div>
+    """, unsafe_allow_html=True)
 
-    for line in diff[:100]:  # Limit to first 100 lines for performance
-        if line.startswith('+ '):
-            diff_html += f'<div class="diff-line diff-added">+ {html.escape(line[2:])}</div>'
-        elif line.startswith('- '):
-            diff_html += f'<div class="diff-line diff-removed">- {html.escape(line[2:])}</div>'
-        elif line.startswith('? '):
-            continue  # Skip hint lines
-        else:
-            diff_html += f'<div class="diff-line diff-unchanged">{html.escape(line[2:])}</div>'
+    # Get smart diff
+    diff_result = differ.compare_texts(orig_text, mod_text)
 
-    if len(diff) > 100:
-        diff_html += f'<div class="diff-line" style="color: #858585; font-style: italic;">... and {len(diff) - 100} more lines</div>'
+    # Get statistics
+    analyzer = ContentAnalyzer()
+    stats = analyzer.get_statistics(diff_result)
 
-    diff_html += '</div>'
+    # Show stats
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Unchanged", stats['unchanged'])
+    with col2:
+        st.metric("Added", stats['added'], delta=f"+{stats['added']}")
+    with col3:
+        st.metric("Removed", stats['removed'], delta=f"-{stats['removed']}")
+    with col4:
+        st.metric("Modified", stats['modified'])
 
-    st.markdown(diff_html, unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Options
+    show_unchanged = st.checkbox("Show unchanged lines", value=False, key="show_unchanged_diff")
+    show_word_diff = st.checkbox("Show word-level changes", value=True, key="show_word_diff")
+
+    # Format and display
+    diff_html = format_diff_for_display(
+        diff_result,
+        max_lines=200,
+        show_unchanged=show_unchanged,
+        show_word_diff=show_word_diff
+    )
+
+    # Add CSS for word-level diff
+    st.markdown("""
+    <style>
+        .word-removed {
+            background: rgba(229, 83, 75, 0.3);
+            color: #f85149;
+            padding: 2px 4px;
+            border-radius: 2px;
+            text-decoration: line-through;
+        }
+
+        .word-added {
+            background: rgba(87, 171, 90, 0.3);
+            color: #57ab5a;
+            padding: 2px 4px;
+            border-radius: 2px;
+            font-weight: bold;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown(f'<div class="content-text">{diff_html}</div>', unsafe_allow_html=True)
 
 
 def show_welcome():

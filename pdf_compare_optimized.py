@@ -63,6 +63,9 @@ class OptimizedPDFExtractor:
             r'^([A-Z][A-Z\s]{2,50})\s*\.{2,}\s*\d+$',  # TITLE .... 45
         ]
 
+        # Cache for footer/header detection
+        self.common_lines = {}  # Track lines that appear on multiple pages
+
     def extract_toc_and_headings(self, pdf_path: str) -> List[HeadingInfo]:
         """
         Fast extraction of just headings and table of contents
@@ -227,21 +230,28 @@ class OptimizedPDFExtractor:
         return 3
 
     def extract_section_content(self, pdf_path: str, heading: HeadingInfo,
-                                next_heading: Optional[HeadingInfo] = None) -> SectionContent:
+                                next_heading: Optional[HeadingInfo] = None,
+                                all_headings: List[HeadingInfo] = None) -> SectionContent:
         """
         Extract content for a specific section on-demand
-        Only loads content between this heading and next heading
+        Handles multi-page sections and removes headers/footers
         """
+        all_page_lines = {}  # Store lines by page for footer detection
         content_lines = []
-        raw_lines = []
 
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                # Determine page range to extract
+                # Determine page range - handle sections spanning multiple pages
                 start_page = heading.page_number - 1  # 0-indexed
-                end_page = next_heading.page_number - 1 if next_heading else len(pdf.pages) - 1
 
-                # Extract content from relevant pages only
+                # Find actual end page by looking for next heading OR end of document
+                if next_heading:
+                    end_page = next_heading.page_number - 1
+                else:
+                    # No next heading, go to end of document
+                    end_page = len(pdf.pages) - 1
+
+                # First pass: collect all lines to detect footers/headers
                 for page_num in range(start_page, min(end_page + 1, len(pdf.pages))):
                     try:
                         page = pdf.pages[page_num]
@@ -250,40 +260,150 @@ class OptimizedPDFExtractor:
                             continue
 
                         lines = text.split('\n')
-
-                        for line_num, line in enumerate(lines):
-                            # On start page, skip lines before heading
-                            if page_num == start_page and line_num < heading.start_line:
-                                continue
-
-                            # On end page with next heading, stop at next heading
-                            if next_heading and page_num == end_page:
-                                if line_num >= next_heading.start_line:
-                                    break
-
-                            # Skip the heading itself
-                            if page_num == start_page and line_num == heading.start_line:
-                                continue
-
-                            raw_lines.append(line)
-
-                            # Clean line
-                            line_clean = line.strip()
-                            if line_clean:
-                                content_lines.append(line_clean)
+                        all_page_lines[page_num] = lines
 
                     except Exception as e:
-                        print(f"Warning: Issue extracting page {page_num + 1}")
                         continue
+
+                # Detect common headers/footers (appear on multiple pages)
+                headers_footers = self._detect_headers_footers(all_page_lines)
+
+                # Second pass: extract actual content, skip headers/footers
+                collecting = False
+                for page_num in range(start_page, min(end_page + 1, len(pdf.pages))):
+                    if page_num not in all_page_lines:
+                        continue
+
+                    lines = all_page_lines[page_num]
+
+                    for line_num, line in enumerate(lines):
+                        line_clean = line.strip()
+
+                        # Skip empty lines
+                        if not line_clean:
+                            continue
+
+                        # On start page, skip until we reach the heading
+                        if page_num == start_page:
+                            if line_num < heading.start_line:
+                                continue
+                            elif line_num == heading.start_line:
+                                collecting = True
+                                continue  # Skip the heading itself
+
+                        # On end page with next heading, stop at next heading
+                        if next_heading and page_num == end_page:
+                            # Check if this line is the next heading
+                            if line_num >= next_heading.start_line:
+                                # Check if line matches next heading title
+                                if self._is_heading_line(line_clean, next_heading, all_headings):
+                                    break
+
+                        # Skip if this is a header/footer
+                        if line_clean in headers_footers:
+                            continue
+
+                        # Skip page numbers (common footer pattern)
+                        if self._is_page_number(line_clean):
+                            continue
+
+                        # Skip if this is actually a heading (not content)
+                        if collecting and self._looks_like_heading(line_clean, all_headings):
+                            # This might be a sub-heading within the section
+                            # Only skip if it's a major heading
+                            if all_headings:
+                                is_major_heading = any(
+                                    h.title == line_clean and h.page_number == page_num + 1
+                                    for h in all_headings
+                                    if h != heading and (not next_heading or h != next_heading)
+                                )
+                                if is_major_heading:
+                                    continue
+
+                        if collecting:
+                            content_lines.append(line_clean)
 
         except Exception as e:
             print(f"Error extracting section content: {str(e)}")
 
+        # Clean up content
+        content_text = '\n'.join(content_lines)
+
+        # Remove multiple consecutive newlines
+        import re
+        content_text = re.sub(r'\n{3,}', '\n\n', content_text)
+
         return SectionContent(
             heading=heading,
-            content='\n'.join(content_lines),
-            raw_text='\n'.join(raw_lines)
+            content=content_text,
+            raw_text=content_text
         )
+
+    def _detect_headers_footers(self, all_page_lines: Dict[int, List[str]]) -> set:
+        """Detect lines that appear on multiple pages (likely headers/footers)"""
+        line_frequency = {}
+
+        for page_num, lines in all_page_lines.items():
+            # Check first 3 lines (potential headers)
+            for line in lines[:3]:
+                line_clean = line.strip()
+                if line_clean and len(line_clean) > 3:
+                    line_frequency[line_clean] = line_frequency.get(line_clean, 0) + 1
+
+            # Check last 3 lines (potential footers)
+            for line in lines[-3:]:
+                line_clean = line.strip()
+                if line_clean and len(line_clean) > 3:
+                    line_frequency[line_clean] = line_frequency.get(line_clean, 0) + 1
+
+        # Lines appearing on 50%+ of pages are likely headers/footers
+        num_pages = len(all_page_lines)
+        threshold = max(2, num_pages * 0.5)  # At least 2 pages or 50%
+
+        headers_footers = {
+            line for line, count in line_frequency.items()
+            if count >= threshold
+        }
+
+        return headers_footers
+
+    def _is_page_number(self, line: str) -> bool:
+        """Check if line is just a page number"""
+        # Common page number patterns
+        if re.match(r'^\d+$', line):  # Just a number
+            return True
+        if re.match(r'^Page\s+\d+$', line, re.IGNORECASE):
+            return True
+        if re.match(r'^\d+\s*/\s*\d+$', line):  # 5 / 250
+            return True
+        return False
+
+    def _is_heading_line(self, line: str, heading: HeadingInfo, all_headings: List[HeadingInfo]) -> bool:
+        """Check if line matches a known heading"""
+        if not heading:
+            return False
+
+        # Exact match
+        if line == heading.title:
+            return True
+
+        # Partial match (heading might have line breaks)
+        if heading.title in line or line in heading.title:
+            return True
+
+        return False
+
+    def _looks_like_heading(self, line: str, all_headings: List[HeadingInfo]) -> bool:
+        """Check if line looks like a heading"""
+        if not all_headings:
+            return False
+
+        # Check against known headings
+        for heading in all_headings:
+            if line == heading.title or heading.title.startswith(line) or line.startswith(heading.title[:20]):
+                return True
+
+        return False
 
 
 class PDFComparator:
@@ -392,13 +512,13 @@ class PDFComparator:
         if orig_heading:
             print(f"Loading original: {orig_heading.title}")
             orig_content = self.extractor.extract_section_content(
-                self.original_path, orig_heading, orig_next
+                self.original_path, orig_heading, orig_next, self.original_headings
             )
 
         if mod_heading:
             print(f"Loading modified: {mod_heading.title}")
             mod_content = self.extractor.extract_section_content(
-                self.modified_path, mod_heading, mod_next
+                self.modified_path, mod_heading, mod_next, self.modified_headings
             )
 
         return orig_content, mod_content
