@@ -33,6 +33,8 @@ st.markdown("""
         margin: 10px 0;
         overflow: hidden;
     }
+    .st-emotion-cache-j2v1nb{
+            width: 100% !important;}
     
     .diff-header {
         background: #2d2d30;
@@ -524,7 +526,8 @@ class ExcelDiffVisualizer:
                     display: flex;
                     flex-direction: column;
                 }}
-                
+                .st-emotion-cache-j2v1nb{{width: 100% !important;}}
+
                 .diff-header {{
                     background: #2d2d30;
                     color: #cccccc;
@@ -832,14 +835,14 @@ class ExcelDiffVisualizer:
                             cell_html += '<span class="cell-empty">[empty]</span>'
                         else:
                             if is_original:
-                                cell_html += f'<span class="cell-value-old">{html.escape(str(value))}</span>'
+                                cell_html += f'<span class="cell-value-old">{str(value)}</span>'
                             else:
-                                cell_html += f'<span class="cell-value-new">{html.escape(str(value))}</span>'
+                                cell_html += f'<span class="cell-value-new">{str(value)}</span>'
                     else:
                         if value is None:
                             cell_html += '<span class="cell-empty">·</span>'
                         else:
-                            cell_html += html.escape(str(value))
+                            cell_html += str(value)
                 else:
                     cell_html += '<span class="cell-empty">·</span>'
                 
@@ -928,12 +931,12 @@ class ExcelDiffVisualizer:
                         if value is None:
                             cell_html += '<span class="cell-empty">[empty]</span>'
                         else:
-                            cell_html += f'<span class="cell-value-old">{html.escape(str(value))}</span>'
+                            cell_html += f'<span class="cell-value-old">{str(value)}</span>'
                     else:
                         if value is None:
                             cell_html += '<span class="cell-empty">·</span>'
                         else:
-                            cell_html += html.escape(str(value))
+                            cell_html += str(value)
                 else:
                     cell_html += '<span class="cell-empty">·</span>'
                 
@@ -985,12 +988,12 @@ class ExcelDiffVisualizer:
                         if value is None:
                             cell_html += '<span class="cell-empty">[empty]</span>'
                         else:
-                            cell_html += f'<span class="cell-value-new">{html.escape(str(value))}</span>'
+                            cell_html += f'<span class="cell-value-new">{str(value)}</span>'
                     else:
                         if value is None:
                             cell_html += '<span class="cell-empty">·</span>'
                         else:
-                            cell_html += html.escape(str(value))
+                            cell_html += str(value)
                 else:
                     cell_html += '<span class="cell-empty">·</span>'
                 
@@ -1029,7 +1032,7 @@ class ExcelDiffVisualizer:
                 for col_idx in range(len(df.columns)):
                     value = df.iloc[row_idx, col_idx]
                     if value is not None:
-                        row_data.append(f'<span class="value-new">{html.escape(str(value))}</span>')
+                        row_data.append(f'<span class="value-new">{str(value)}</span>')
                     else:
                         row_data.append('<span class="cell-empty">[empty]</span>')
                 html += ' | '.join(row_data)
@@ -1061,7 +1064,7 @@ class ExcelDiffVisualizer:
                 for col_idx in range(len(df.columns)):
                     value = df.iloc[row_idx, col_idx]
                     if value is not None:
-                        row_data.append(f'<span class="value-old">{html.escape(str(value))}</span>')
+                        row_data.append(f'<span class="value-old">{str(value)}</span>')
                     else:
                         row_data.append('<span class="cell-empty">[empty]</span>')
                 html += ' | '.join(row_data)
@@ -1227,8 +1230,8 @@ def main():
                                     <div class="change-item">
                                         <span class="change-location">{location}</span>
                                         <span class="change-arrow">→</span>
-                                        Modified from <span class="value-old">{html.escape(old_val)}</span> 
-                                        to <span class="value-new">{html.escape(new_val)}</span>
+                                        Modified from <span class="value-old">{old_val}</span> 
+                                        to <span class="value-new">{new_val}</span>
                                     </div>
                                     """
                                     st.markdown(change_html, unsafe_allow_html=True)
