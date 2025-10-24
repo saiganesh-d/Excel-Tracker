@@ -31,6 +31,9 @@ datas += [
     ('main.py', '.'),
     ('pdf_compare.py', '.'),
     ('pdf_compare_ui.py', '.'),
+    ('pdf_compare_optimized.py', '.'),
+    ('pdf_compare_ui_optimized.py', '.'),
+    ('smart_diff.py', '.'),
 ]
 
 # Hidden imports (modules that PyInstaller might miss)
