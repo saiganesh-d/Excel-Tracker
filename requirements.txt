@@ -1,7 +1,36 @@
+# Core Web Framework
 streamlit>=1.28.0
+
+# Excel Processing (existing)
 pandas>=2.0.0
 openpyxl>=3.1.0
-numpy>=1.24.0
 xlsxwriter>=3.1.0
+
+# PDF Processing (existing)
 pdfplumber>=0.10.0
-pyinstaller>=6.0.0
+pypdf2>=3.0.0
+
+# NEW - Semantic Comparison & AI
+sentence-transformers>=2.2.0  # Multilingual embeddings
+transformers>=4.30.0  # Translation models (Opus-MT)
+# Note: Install PyTorch separately with CUDA support:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# NEW - Language Detection
+langdetect>=1.0.9
+
+# Scientific Computing
+numpy>=1.24.0
+scikit-learn>=1.3.0  # For cosine similarity
+scipy>=1.10.0  # For Hungarian algorithm
+
+# NEW - Optional Local LLM (for explanations)
+llama-cpp-python>=0.2.0  # Optional, for advanced explanations
+
+# Utilities
+tqdm>=4.65.0  # Progress bars
+python-dotenv>=1.0.0  # Environment variables (if needed)
+
+# Note: PyInstaller removed (no longer building EXE, web-based deployment)
+# Note: Total download size ~3-4GB for packages
+# Models are downloaded separately via download_models.py (~5GB)
