@@ -95,6 +95,8 @@ def main():
         show_pdf_comparison()
     elif st.session_state['selected_tool'] == 'pdf_optimized':
         show_pdf_comparison_optimized()
+    elif st.session_state['selected_tool'] == 'pdf_advanced':
+        show_pdf_comparison_advanced()
 
 
 def show_tool_selection():
@@ -109,7 +111,7 @@ def show_tool_selection():
 
     st.markdown("### Choose Your Comparison Tool")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
 
     with col1:
         st.markdown("""
@@ -138,50 +140,44 @@ def show_tool_selection():
     with col2:
         st.markdown("""
         <div class="tool-card">
-            <div class="tool-icon">📄</div>
-            <div class="tool-title">PDF Structure Comparison</div>
+            <div class="tool-icon">🤖</div>
+            <div class="tool-title">Advanced PDF Comparison (AI-Powered)</div>
             <div class="tool-description">
-                Intelligently compare PDF documents by structure and content.
-                Ideal for requirement document analysis.
+                Next-generation PDF comparison with semantic understanding,
+                requirement tracking, and optional AI explanations.
 
                 <ul class="feature-list">
-                    <li>Hierarchical section matching</li>
-                    <li>Handles reordering & removal</li>
-                    <li>Critical keyword highlighting</li>
-                    <li>Text-level diff visualization</li>
-                    <li>Multi-column layout support</li>
+                    <li>🧠 Semantic understanding (95%+ accuracy)</li>
+                    <li>🌍 Multi-language support (50+ languages)</li>
+                    <li>📋 Requirement analysis (MUST/SHALL/SHOULD)</li>
+                    <li>🤖 Optional AI explanations</li>
+                    <li>🔒 100% local processing (privacy-first)</li>
                 </ul>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-        if st.button("🚀 Launch PDF Comparison", key="launch_pdf", type="primary", use_container_width=True):
-            st.session_state['selected_tool'] = 'pdf'
+        if st.button("🚀 Launch Advanced PDF", key="launch_pdf_adv", type="primary", use_container_width=True):
+            st.session_state['selected_tool'] = 'pdf_advanced'
             st.rerun()
 
-    with col3:
-        st.markdown("""
-        <div class="tool-card">
-            <div class="tool-icon">⚡</div>
-            <div class="tool-title">PDF Comparison (Fast)</div>
-            <div class="tool-description">
-                Optimized PDF comparison with dropdown navigation.
-                Much faster for large documents!
+    # Show older PDF tools in expander
+    with st.expander("📄 Other PDF Comparison Tools (Legacy)"):
+        col3, col4 = st.columns(2)
 
-                <ul class="feature-list">
-                    <li>⚡ Extract structure in seconds</li>
-                    <li>📑 Dropdown section selector</li>
-                    <li>🎯 Load content on-demand</li>
-                    <li>↔️ Side-by-side view</li>
-                    <li>💡 Better for large PDFs</li>
-                </ul>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        with col3:
+            st.markdown("**PDF Structure Comparison**")
+            st.markdown("Hierarchical section matching, handles reordering")
+            if st.button("Launch PDF Structure", key="launch_pdf", use_container_width=True):
+                st.session_state['selected_tool'] = 'pdf'
+                st.rerun()
 
-        if st.button("🚀 Launch Fast PDF", key="launch_pdf_opt", type="primary", use_container_width=True):
-            st.session_state['selected_tool'] = 'pdf_optimized'
-            st.rerun()
+        with col4:
+            st.markdown("**PDF Comparison (Fast)**")
+            st.markdown("Optimized for large documents, dropdown navigation")
+            if st.button("Launch Fast PDF", key="launch_pdf_opt", use_container_width=True):
+                st.session_state['selected_tool'] = 'pdf_optimized'
+                st.rerun()
 
     # Information section
     st.markdown("---")
@@ -268,6 +264,26 @@ def show_pdf_comparison_optimized():
     # Import and run optimized PDF comparison
     from pdf_compare_ui_optimized import create_optimized_pdf_ui
     create_optimized_pdf_ui()
+
+
+def show_pdf_comparison_advanced():
+    """Show advanced AI-powered PDF comparison tool"""
+
+    # Add back button in sidebar
+    with st.sidebar:
+        if st.button("⬅️ Back to Tool Selection", key="back_from_pdf_adv"):
+            st.session_state['selected_tool'] = None
+            # Clear PDF-related session state
+            for key in list(st.session_state.keys()):
+                if key.startswith('pdf_adv_') or key in ['comparison_done', 'report', 'config']:
+                    del st.session_state[key]
+            st.rerun()
+
+        st.divider()
+
+    # Import and run advanced PDF comparison
+    from pdf_compare_ui_advanced import main as advanced_pdf_main
+    advanced_pdf_main()
 
 
 if __name__ == "__main__":
