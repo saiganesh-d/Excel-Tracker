@@ -25,9 +25,21 @@ from enum import Enum
 try:
     from llama_cpp import Llama
     LLAMA_CPP_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     LLAMA_CPP_AVAILABLE = False
-    print("[!] llama-cpp-python not available. Run: pip install llama-cpp-python")
+    print("[!] llama-cpp-python not available")
+    print(f"    Error: {e}")
+    print("\n    Quick fix for Windows:")
+    print("    pip uninstall llama-cpp-python -y")
+    print("    pip install llama-cpp-python --prefer-binary")
+    print("\n    Or disable LLM: set enable_llm=False")
+    print("    See TROUBLESHOOTING_LLM.md for detailed help")
+    Llama = None
+except Exception as e:
+    LLAMA_CPP_AVAILABLE = False
+    print(f"[!] Error loading llama-cpp-python: {e}")
+    print("\n    This is likely a DLL dependency issue.")
+    print("    See TROUBLESHOOTING_LLM.md for solutions")
     Llama = None
 
 
