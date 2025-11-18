@@ -3,17 +3,21 @@
 
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import copy_metadata
+
 block_cipher = None
 
 a = Analysis(
-    ['main.py'],
+    ['excel_launcher.py'],
     pathex=[],
     binaries=[],
     datas=[
-        # Include Streamlit's static files
+        # Include main.py as a data file
+        ('main.py', '.'),
+        # Include Streamlit's static files and metadata
         ('venv/Lib/site-packages/streamlit/static', 'streamlit/static'),
         ('venv/Lib/site-packages/streamlit/runtime', 'streamlit/runtime'),
-    ],
+    ] + copy_metadata('streamlit') + copy_metadata('altair') + copy_metadata('pandas'),
     hiddenimports=[
         'streamlit',
         'streamlit.web.cli',
@@ -33,6 +37,7 @@ a = Analysis(
         'packaging.version',
         'packaging.specifiers',
         'packaging.requirements',
+        'importlib_metadata',
     ],
     hookspath=[],
     hooksconfig={},
